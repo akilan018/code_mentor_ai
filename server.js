@@ -10,8 +10,14 @@ const https       = require('https');
 const mongoose    = require('mongoose');
 const helmet      = require('helmet');
 const rateLimit   = require('express-rate-limit');
+const dns         = require('dns');
+
+// Force IPv4 for external connections (fixes nodemailer IPv6 ENETUNREACH error on Render)
+dns.setDefaultResultOrder('ipv4first');
 
 const app  = express();
+app.set('trust proxy', 1); // Trust Render's load balancer for rate limiting
+
 const PORT = process.env.PORT || 3000;
 
 const GEMINI_KEY   = process.env.GEMINI_API_KEY || '';
@@ -127,7 +133,9 @@ async function sendEmailOTP(to, otp, purpose) {
     console.log(`\n📧  [DEV] Email OTP for ${to} → ${otp}\n`); return;
   }
   const t = nodemailer.createTransport({
-    service: 'gmail',
+    host: 'smtp.gmail.com',
+    port: 465,
+    secure: true,
     auth: { user: GMAIL_USER, pass: GMAIL_PASS },
     connectionTimeout: 10000,  // 10s max to connect
     greetingTimeout:   8000,   // 8s max for server greeting
