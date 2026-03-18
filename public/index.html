@@ -11,7 +11,7 @@
 <div id="shell">
 
   <!-- ── MOBILE OVERLAY ── -->
-  <div class="ov" id="ov" onclick="closeSidebar()"></div>
+  <div class="ov" id="ov" onclick="closeSidebarOverlay()"></div>
 
   <!-- ── SIDEBAR ── -->
   <aside class="sidebar" id="sidebar">
@@ -46,7 +46,7 @@
       </div>
       <div class="sb-btns">
         <button class="sb-btn adm-btn" id="sbAdminBtn" style="display:none" onclick="openAdmin()">⬡ Admin</button>
-        <button class="sb-btn" onclick="openPasswordModal()">⟳ Password</button>
+        <button class="sb-btn" onclick="openSettingsModal()">⚙ Settings</button>
         <button class="sb-btn logout" onclick="doLogout()">↩ Logout</button>
       </div>
     </div>
@@ -57,7 +57,8 @@
 
     <header class="topbar">
       <div class="tb-left">
-        <button class="hamburger" onclick="toggleSidebar()">
+        <!-- Hamburger — visible on BOTH mobile and desktop -->
+        <button class="hamburger" id="hamburgerBtn" onclick="toggleSidebar()">
           <svg viewBox="0 0 24 24"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
         </button>
         <div class="chat-title-display" id="chatTitleDisplay">New Chat</div>
@@ -82,6 +83,7 @@
       <div class="messages" id="messages"></div>
     </div>
 
+    <!-- ── INPUT AREA — ChatGPT Style ── -->
     <div class="input-area">
       <div class="lang-strip">
         <span class="lang-label">Lang ›</span>
@@ -95,30 +97,56 @@
         <button class="lang-btn" onclick="setLang(this,'Rust')">Rust</button>
         <button class="lang-btn" onclick="setLang(this,'SQL')">SQL</button>
       </div>
-      <div class="input-row">
-        <input type="file" id="fileInput" accept="image/png,image/jpeg,image/webp,application/pdf" style="display:none" onchange="handleFileUpload(event)">
-        <button class="attach-btn" onclick="document.getElementById('fileInput').click()" title="Attach PDF or Image">
-          <svg viewBox="0 0 24 24"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-        </button>
-        <div class="textarea-wrap">
-          <div id="filePreview" class="file-preview" style="display:none">
-            <span id="fileName"></span>
-            <button class="clear-file-btn" onclick="clearFile()">✕</button>
-          </div>
-          <textarea id="msgInput" class="msg-textarea"
-            placeholder="Ask anything — write code, debug, explain a concept…"
-            rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
-          <div class="textarea-footer">
-            <div class="input-tags">
-              <span class="input-tag" id="modeTag">✦ code</span>
-              <span class="input-tag" id="langTag">◎ auto</span>
-            </div>
-            <span class="char-count" id="charCount">0 / 2000</span>
-          </div>
+
+      <!-- Hidden file inputs -->
+      <input type="file" id="fileInputImage"    accept="image/png,image/jpeg,image/webp,image/gif" style="display:none" onchange="handleFileUpload(event,'image')">
+      <input type="file" id="fileInputDocument" accept="application/pdf,.txt,.md,.csv" style="display:none" onchange="handleFileUpload(event,'document')">
+      <input type="file" id="fileInputProject"  accept=".js,.ts,.py,.java,.cpp,.c,.html,.css,.json,.xml,.yaml,.zip" style="display:none" onchange="handleFileUpload(event,'project')">
+
+      <div class="chatgpt-input-box">
+        <!-- File preview inside box -->
+        <div id="filePreview" class="file-preview" style="display:none">
+          <span id="fileName"></span>
+          <button class="clear-file-btn" onclick="clearFile()">✕</button>
         </div>
-        <button class="send-btn" id="sendBtn" onclick="sendMessage()">
-          <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
-        </button>
+
+        <!-- Textarea -->
+        <textarea id="msgInput" class="msg-textarea"
+          placeholder="Ask anything — write code, debug, explain a concept…"
+          rows="1" onkeydown="handleKey(event)" oninput="autoResize(this)"></textarea>
+
+        <!-- Bottom row: + menu | tags | char count | send -->
+        <div class="input-bottom-row">
+          <!-- + Button with dropdown -->
+          <div class="plus-wrap" id="plusWrap">
+            <button class="plus-btn" onclick="togglePlusMenu(event)" title="Attach file">+</button>
+            <div class="plus-dropdown" id="plusDropdown">
+              <button class="plus-item" onclick="triggerFile('image')">
+                <span class="plus-item-icon">🖼</span>
+                <span class="plus-item-text"><strong>Image</strong><small>PNG, JPG, WEBP, GIF</small></span>
+              </button>
+              <button class="plus-item" onclick="triggerFile('document')">
+                <span class="plus-item-icon">📄</span>
+                <span class="plus-item-text"><strong>Document</strong><small>PDF, TXT, MD, CSV</small></span>
+              </button>
+              <button class="plus-item" onclick="triggerFile('project')">
+                <span class="plus-item-icon">📁</span>
+                <span class="plus-item-text"><strong>Project File</strong><small>JS, PY, HTML, JSON…</small></span>
+              </button>
+            </div>
+          </div>
+
+          <div class="input-tags">
+            <span class="input-tag" id="modeTag">✦ code</span>
+            <span class="input-tag" id="langTag">◎ auto</span>
+          </div>
+
+          <span class="char-count" id="charCount">0 / 2000</span>
+
+          <button class="send-btn" id="sendBtn" onclick="sendMessage()">
+            <svg viewBox="0 0 24 24"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg>
+          </button>
+        </div>
       </div>
     </div>
 
@@ -137,7 +165,6 @@
         <div class="eb-div"></div>
         <div class="eb-item"><span class="eb-key">📎 Upload</span><span class="eb-val">Attach an image or PDF — AI will explain the code inside</span></div>
         <div class="eb-div"></div>
-        <!-- Duplicate for seamless loop -->
         <div class="eb-item"><span class="eb-key">✦ Code</span><span class="eb-val">Write any program — gets Easy + Optimized versions</span></div>
         <div class="eb-div"></div>
         <div class="eb-item"><span class="eb-key">◎ Explain</span><span class="eb-val">Understand any concept with analogies + examples</span></div>
@@ -183,13 +210,11 @@
     <div id="form-login">
       <div class="fg">
         <label class="fl">User ID</label>
-        <input class="fi" id="loginUserId" type="text" placeholder="your_user_id"
-          onkeydown="if(event.key==='Enter') doLogin()">
+        <input class="fi" id="loginUserId" type="text" placeholder="your_user_id" onkeydown="if(event.key==='Enter') doLogin()">
       </div>
       <div class="fg">
         <label class="fl">Password</label>
-        <input class="fi" id="loginPass" type="password" placeholder="••••••••"
-          onkeydown="if(event.key==='Enter') doLogin()">
+        <input class="fi" id="loginPass" type="password" placeholder="••••••••" onkeydown="if(event.key==='Enter') doLogin()">
       </div>
       <button class="auth-btn" onclick="doLogin()">Sign In →</button>
       <div class="f-err" id="loginErr"></div>
@@ -204,8 +229,7 @@
       </div>
       <div class="fg">
         <label class="fl">User ID <span class="fl-note">3–20 chars, letters/numbers/underscore</span></label>
-        <input class="fi" id="regUserId" type="text" placeholder="alex_johnson"
-          oninput="checkUid(this.value)">
+        <input class="fi" id="regUserId" type="text" placeholder="alex_johnson" oninput="checkUid(this.value)">
         <div class="uid-hint" id="uidHint"></div>
       </div>
       <div class="fg">
@@ -214,8 +238,7 @@
       </div>
       <div class="fg">
         <label class="fl">Password <span class="fl-note">min 8 chars, upper/lower/number/symbol</span></label>
-        <input class="fi" id="regPass" type="password" placeholder="Min 8 chars with A-Z, 0-9, !@#…"
-          oninput="pwStrength(this.value)">
+        <input class="fi" id="regPass" type="password" placeholder="Min 8 chars with A-Z, 0-9, !@#…" oninput="pwStrength(this.value)">
         <div class="pw-bars"><div class="pw-bar" id="pb1"></div><div class="pw-bar" id="pb2"></div><div class="pw-bar" id="pb3"></div></div>
         <div class="pw-hint" id="pwHint">Enter a password</div>
       </div>
@@ -228,9 +251,8 @@
       <div class="f-err" id="regErr"></div>
     </div>
 
-    <!-- FORGOT PASSWORD — 3-Step OTP Flow -->
+    <!-- FORGOT PASSWORD -->
     <div id="form-forgot" style="display:none">
-      <!-- Step 1: Enter User ID -->
       <div id="forgot-step1">
         <p class="forgot-info">Enter your <strong>User ID</strong> and we'll send an OTP to your registered email.</p>
         <div class="fg">
@@ -241,19 +263,16 @@
         <div class="f-err" id="forgotErr"></div>
         <div class="f-ok" id="forgotOk"></div>
       </div>
-      <!-- Step 2: Enter OTP -->
       <div id="forgot-step2" style="display:none">
         <p class="forgot-info">✓ OTP sent to your email. Enter the <strong>6-digit code</strong> below.</p>
         <div class="fg">
           <label class="fl">6-Digit OTP</label>
-          <input class="fi" id="forgotOtpInput" type="text" maxlength="6" placeholder="123456"
-            oninput="this.value=this.value.replace(/[^0-9]/g,'')">
+          <input class="fi" id="forgotOtpInput" type="text" maxlength="6" placeholder="123456" oninput="this.value=this.value.replace(/[^0-9]/g,'')">
         </div>
         <button class="auth-btn" onclick="doForgotVerifyOtp()">Verify OTP →</button>
         <div class="f-err" id="forgotOtpErr"></div>
         <div class="f-ok" id="forgotOtpOk"></div>
       </div>
-      <!-- Step 3: Set New Password -->
       <div id="forgot-step3" style="display:none">
         <p class="forgot-info">✓ Identity verified. Set your <strong>new password</strong> below.</p>
         <div class="fg">
@@ -280,35 +299,54 @@
 </div>
 
 <!-- ═══════════════════════════
-     CHANGE PASSWORD MODAL
+     SETTINGS MODAL (Change Name + Change Password)
 ═══════════════════════════ -->
-<div class="modal-backdrop" id="passwordModal">
+<div class="modal-backdrop" id="settingsModal">
   <div class="modal-box">
     <div class="modal-header">
-      <h2>Change Password</h2>
-      <button class="modal-close" onclick="closePasswordModal()">✕</button>
+      <h2>⚙ Settings</h2>
+      <button class="modal-close" onclick="closeSettingsModal()">✕</button>
     </div>
     <div class="modal-body">
-      <div class="fg">
-        <label class="fl">Current Password</label>
-        <input class="fi" id="pwCurrent" type="password" placeholder="your current password">
+
+      <!-- Change Display Name -->
+      <div class="settings-section">
+        <h3 class="settings-section-title">Change Display Name</h3>
+        <div class="fg">
+          <label class="fl">New Name</label>
+          <input class="fi" id="newNameInput" type="text" placeholder="Enter your new display name">
+        </div>
+        <button class="auth-btn" onclick="doChangeName()">Update Name →</button>
+        <div class="f-err" id="nameErr"></div>
+        <div class="f-ok"  id="nameOk"></div>
       </div>
-      <div class="fg">
-        <label class="fl">🔐 Security Question <span class="fl-note">for verification</span></label>
-        <div class="security-q-box">What is your favorite book?</div>
-        <input class="fi" id="pwSecAnswer" type="text" placeholder="Your security answer">
+
+      <div class="settings-divider"></div>
+
+      <!-- Change Password -->
+      <div class="settings-section">
+        <h3 class="settings-section-title">Change Password</h3>
+        <div class="fg">
+          <label class="fl">Current Password</label>
+          <input class="fi" id="pwCurrent" type="password" placeholder="your current password">
+        </div>
+        <div class="fg">
+          <label class="fl">🔐 Security Answer <span class="fl-note">What is your favorite book?</span></label>
+          <input class="fi" id="pwSecAnswer" type="text" placeholder="Your security answer">
+        </div>
+        <div class="fg">
+          <label class="fl">New Password <span class="fl-note">min 8 chars, A-Z + 0-9 + symbol</span></label>
+          <input class="fi" id="pwNew" type="password" placeholder="Min 8 chars">
+        </div>
+        <div class="fg">
+          <label class="fl">Confirm New Password</label>
+          <input class="fi" id="pwConfirm" type="password" placeholder="repeat new password">
+        </div>
+        <button class="auth-btn" onclick="doChangePassword()">Update Password →</button>
+        <div class="f-err" id="pwErr"></div>
+        <div class="f-ok"  id="pwOk"></div>
       </div>
-      <div class="fg">
-        <label class="fl">New Password <span class="fl-note">min 8 chars, A-Z + 0-9 + symbol</span></label>
-        <input class="fi" id="pwNew" type="password" placeholder="Min 8 chars">
-      </div>
-      <div class="fg">
-        <label class="fl">Confirm New Password</label>
-        <input class="fi" id="pwConfirm" type="password" placeholder="repeat new password">
-      </div>
-      <button class="auth-btn" onclick="doChangePassword()">Update Password →</button>
-      <div class="f-err" id="pwErr"></div>
-      <div class="f-ok" id="pwOk"></div>
+
     </div>
   </div>
 </div>
@@ -380,3 +418,4 @@
 <script src="/js/app.js"></script>
 </body>
 </html>
+
