@@ -18,9 +18,7 @@ const PORT = process.env.PORT || 3000;
 /* ───────────────────────────────────────
    MULTIPLE GEMINI KEY ROTATION
    Add in Render env:
-   GEMINI_API_KEY_1, GEMINI_API_KEY_2,
-   GEMINI_API_KEY_3, GEMINI_API_KEY_4,
-   GEMINI_API_KEY_5
+   GEMINI_API_KEY_1 through GEMINI_API_KEY_5
 ─────────────────────────────────────── */
 const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY_1,
@@ -535,47 +533,26 @@ app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req, res)
   res.send(JSON.stringify(data, null, 2));
 });
 
-/* ───────────────────────────────────────
-   ROLE CHANGE RULES:
-   - Nobody can change their own role
-   - Nobody can change main admin role
-   - Sub-admins CANNOT demote other admins
-   - Only main admin CAN demote sub-admins
-─────────────────────────────────────── */
 app.put('/api/admin/users/:uid/role', auth, admin, async (req, res) => {
   const { role } = req.body;
   if (!['admin', 'user'].includes(role)) return res.status(400).json({ error: 'Invalid role.' });
-
   const u = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-  if (u.userId === req.session.user.userId)
-    return res.status(400).json({ error: 'Cannot change your own role.' });
-  if (u.userId === 'admin')
-    return res.status(403).json({ error: 'Main admin role cannot be changed.' });
+  if (u.userId === req.session.user.userId) return res.status(400).json({ error: 'Cannot change your own role.' });
+  if (u.userId === 'admin') return res.status(403).json({ error: 'Main admin role cannot be changed.' });
   if (u.role === 'admin' && !isMain(req.session.user))
     return res.status(403).json({ error: 'Only the main admin can demote other admins.' });
-
   u.role = role; await u.save();
   res.json({ success: true });
 });
 
-/* ───────────────────────────────────────
-   DELETE RULES:
-   - Nobody can delete themselves
-   - Main admin can never be deleted
-   - Sub-admins CANNOT delete other admins
-   - Only main admin CAN delete sub-admins
-─────────────────────────────────────── */
 app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   const u = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-  if (u.userId === req.session.user.userId)
-    return res.status(400).json({ error: 'Cannot delete yourself.' });
-  if (u.userId === 'admin')
-    return res.status(403).json({ error: 'Main admin cannot be deleted.' });
+  if (u.userId === req.session.user.userId) return res.status(400).json({ error: 'Cannot delete yourself.' });
+  if (u.userId === 'admin') return res.status(403).json({ error: 'Main admin cannot be deleted.' });
   if (u.role === 'admin' && !isMain(req.session.user))
     return res.status(403).json({ error: 'Only the main admin can delete other admins.' });
-
   await Chat.deleteMany({ ownerId: u.id });
   await User.deleteOne({ userId: u.userId });
   res.json({ success: true });
@@ -583,8 +560,10 @@ app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
 
 /* ───────────────────────────────────────
    CHAT — Multiple Gemini Key Rotation
-   Rotates keys on every request
-   On 429 rate limit → tries next key
+   ✅ FIXED MODEL NAMES:
+   gemini-2.0-flash  ← primary (fast, free)
+   gemini-1.5-flash  ← fallback (stable)
+   On 429 rate limit → auto tries next key
 ─────────────────────────────────────── */
 app.post('/api/chat', auth, async (req, res) => {
   if (!GEMINI_KEYS.length)
@@ -608,8 +587,10 @@ app.post('/api/chat', auth, async (req, res) => {
     generationConfig: { maxOutputTokens: 8192, temperature: 0.7 }
   });
 
-  const hasImage    = messages.some(m => m.file && m.file.data);
-  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash'];
+  const hasImage = messages.some(m => m.file && m.file.data);
+
+  // ✅ CORRECT working model names as of 2026
+  const modelsToTry = ['gemini-2.0-flash', 'gemini-1.5-flash'];
 
   const callGemini = (model, apiKey) => new Promise((resolve, reject) => {
     const timeout = hasImage ? 90000 : 30000;
@@ -643,12 +624,12 @@ app.post('/api/chat', auth, async (req, res) => {
             return res.json({ content: [{ type: 'text', text: p.candidates[0].content.parts[0].text }] });
           }
         } else if (response.status === 429) {
-          console.warn(`[Key ${i+1}/${GEMINI_KEYS.length}][${model}] Rate limited, trying next key...`);
+          console.warn(`[Key ${i+1}/${GEMINI_KEYS.length}][${model}] Rate limited → trying next key...`);
           continue;
         } else {
           try {
             const errObj = JSON.parse(response.data);
-            lastError = errObj.error?.message || `${model} failed with status ${response.status}`;
+            lastError = errObj.error?.message || `${model} failed (${response.status})`;
           } catch {
             lastError = `${model} returned status ${response.status}`;
           }
@@ -677,4 +658,3 @@ mongoose.connection.once('open', async () => {
     if (!BREVO_KEY) console.log(`    📧  Email OTP → [DEV mode, add BREVO_API_KEY]`);
   });
 });
-
