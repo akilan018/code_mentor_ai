@@ -495,7 +495,7 @@ app.post('/api/chat', auth, async (req, res) => {
   const hasImage = messages.some(m => m.file?.data);
 
   // ✅ VERIFIED working model names
-  const modelsToTry = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0','gemini-1.5-flash','gemini-1.5-pro'];
 
   const callGemini = (model, apiKey) => new Promise((resolve, reject) => {
     const opts = {
