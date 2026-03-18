@@ -136,6 +136,7 @@ async function sendEmailOTP(to, otp, purpose) {
     host: 'smtp.gmail.com',
     port: 465,
     secure: true,
+    family: 4,             // ← FIXED: force IPv4, prevents ENETUNREACH on Render
     auth: { user: GMAIL_USER, pass: GMAIL_PASS },
     connectionTimeout: 10000,  // 10s max to connect
     greetingTimeout:   8000,   // 8s max for server greeting
