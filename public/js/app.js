@@ -1,55 +1,86 @@
-/* ══════════════════════════════════════════════════
-   CodeMentor AI — app.js (v5 — MongoDB + Security)
-   - Unique User ID enforced
-   - Security question for password reset
-   - Strong password (8+ chars, upper/lower/num/sym)
-   - Unique password (no reuse of last 5)
-   - Admin: view + download user messages
-══════════════════════════════════════════════════ */
-
 /* ── STATE ── */
 let CU = null, mode = 'code', lang = 'Auto', busy = false, activeId = null, cache = {};
 let regUserId = '', forgotResetToken = '', forgotResetUserId = '';
 let currentFile = null;
 
-function handleFileUpload(e) {
+/* ══════════════════════════════════════
+   FILE UPLOAD — handles image/document/project
+══════════════════════════════════════ */
+function triggerFile(type) {
+  closePlusMenu();
+  const ids = { image: 'fileInputImage', document: 'fileInputDocument', project: 'fileInputProject' };
+  document.getElementById(ids[type])?.click();
+}
+
+function handleFileUpload(e, type) {
   const file = e.target.files[0];
   if (!file) return;
-  if (file.size > 10 * 1024 * 1024) return alert("File too large. Max 10MB limit.");
+  if (file.size > 10 * 1024 * 1024) { alert('File too large. Max 10MB.'); return; }
 
-  // Show upload progress overlay immediately
   const fpEl = document.getElementById('filePreview');
   const fnEl = document.getElementById('fileName');
   if (fpEl) fpEl.style.display = 'flex';
-  if (fnEl) {
-    fnEl.innerHTML = '<span class="upload-spinner"></span><span class="upload-label">Reading file…</span>';
-  }
+  if (fnEl) fnEl.innerHTML = '<span class="upload-spinner"></span><span class="upload-label">Reading file…</span>';
 
   const reader = new FileReader();
-  reader.onprogress = function(evt) {
+  reader.onprogress = (evt) => {
     if (evt.lengthComputable && fnEl) {
       const pct = Math.round((evt.loaded / evt.total) * 100);
       fnEl.innerHTML = `<span class="upload-spinner"></span><span class="upload-label">Loading ${pct}%…</span>`;
     }
   };
-  reader.onload = function(evt) {
+  reader.onload = (evt) => {
     const base64 = evt.target.result.split(',')[1];
-    currentFile = { data: base64, mimeType: file.type, name: file.name };
-    if (fnEl) fnEl.innerHTML = '📎 ' + file.name;
+    const icon = type === 'image' ? '🖼' : type === 'document' ? '📄' : '📁';
+    currentFile = { data: base64, mimeType: file.type, name: file.name, fileType: type };
+    if (fnEl) fnEl.innerHTML = `${icon} ${file.name}`;
     if (fpEl) fpEl.style.display = 'flex';
   };
   reader.readAsDataURL(file);
+  // Reset the input so same file can be re-selected
+  e.target.value = '';
 }
 
 function clearFile() {
   currentFile = null;
-  const fi = document.getElementById('fileInput');
-  if (fi) fi.value = '';
+  ['fileInputImage','fileInputDocument','fileInputProject'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.value = '';
+  });
   const fp = document.getElementById('filePreview');
   if (fp) fp.style.display = 'none';
 }
 
-/* ── THEME ── */
+/* ══════════════════════════════════════
+   PLUS MENU — toggle open/close
+══════════════════════════════════════ */
+function togglePlusMenu(e) {
+  e?.stopPropagation();
+  const dropdown = document.getElementById('plusDropdown');
+  const btn = document.querySelector('.plus-btn');
+  const isOpen = dropdown.classList.contains('open');
+  if (isOpen) {
+    closePlusMenu();
+  } else {
+    dropdown.classList.add('open');
+    btn?.classList.add('open');
+  }
+}
+
+function closePlusMenu() {
+  document.getElementById('plusDropdown')?.classList.remove('open');
+  document.querySelector('.plus-btn')?.classList.remove('open');
+}
+
+// Close plus menu when clicking outside
+document.addEventListener('click', (e) => {
+  if (!document.getElementById('plusWrap')?.contains(e.target)) {
+    closePlusMenu();
+  }
+});
+
+/* ══════════════════════════════════════
+   THEME
+══════════════════════════════════════ */
 const savedTh = localStorage.getItem('cm_theme') || 'dark';
 document.documentElement.setAttribute('data-theme', savedTh);
 updateThemeBtn(savedTh);
@@ -64,7 +95,9 @@ function updateThemeBtn(t) {
   if (b) b.textContent = t === 'dark' ? '🌙' : '☀️';
 }
 
-/* ── API HELPER ── */
+/* ══════════════════════════════════════
+   API HELPER
+══════════════════════════════════════ */
 async function api(method, url, body) {
   const r = await fetch(url, {
     method, credentials: 'include',
@@ -75,7 +108,9 @@ async function api(method, url, body) {
 }
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-/* ── INIT ── */
+/* ══════════════════════════════════════
+   INIT
+══════════════════════════════════════ */
 (async () => {
   const res = await api('GET', '/api/auth/me');
   if (res.user) loginOk(res.user);
@@ -91,7 +126,6 @@ function switchAuthTab(tab) {
   document.getElementById('form-' + tab).style.display = 'block';
   document.getElementById('tab-login')?.classList.toggle('active', tab === 'login');
   document.getElementById('tab-reg')?.classList.toggle('active', tab === 'reg');
-  // Reset forgot steps
   if (tab === 'forgot') {
     document.getElementById('forgot-step1').style.display = '';
     document.getElementById('forgot-step2').style.display = 'none';
@@ -101,9 +135,8 @@ function switchAuthTab(tab) {
   clearAuthErrors();
 }
 function clearAuthErrors() {
-  ['loginErr','regErr','forgotErr','forgotOk','forgotOtpErr','forgotOtpOk','forgotResetErr','forgotResetOk','pwErr','pwOk'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) el.textContent = '';
+  ['loginErr','regErr','forgotErr','forgotOk','forgotOtpErr','forgotOtpOk','forgotResetErr','forgotResetOk','pwErr','pwOk','nameErr','nameOk'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = '';
   });
 }
 
@@ -140,22 +173,18 @@ async function doLogout() {
   await api('POST', '/api/auth/logout');
   CU = null; activeId = null; cache = {};
   document.getElementById('authModal').classList.add('open');
-  // Clear login fields
-  document.getElementById('loginUserId').value = '';
-  document.getElementById('loginPass').value   = '';
-  // Clear sign-up fields so data doesn't persist after logout
-  ['regName','regUserId','regEmail','regPass','regSecAnswer'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.value = '';
-  });
+  ['loginUserId','loginPass'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+  ['regName','regUserId','regEmail','regPass','regSecAnswer'].forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
   document.getElementById('uidHint').textContent = '';
   document.getElementById('pwHint').textContent  = 'Enter a password';
   ['pb1','pb2','pb3'].forEach(id => { const el = document.getElementById(id); if (el) el.className = 'pw-bar'; });
   switchAuthTab('login');
-  closeSidebar();
+  // On mobile, close sidebar; on desktop, keep as-is
+  if (window.innerWidth <= 768) closeSidebarMobile();
 }
 
 /* ══════════════════════════════════════
-   REGISTER (2 steps: info → OTP)
+   REGISTER
 ══════════════════════════════════════ */
 function checkUid(val) {
   const hint = document.getElementById('uidHint');
@@ -170,19 +199,14 @@ function checkUid(val) {
 }
 
 function pwStrength(val) {
-  const b1 = document.getElementById('pb1');
-  const b2 = document.getElementById('pb2');
-  const b3 = document.getElementById('pb3');
-  const h  = document.getElementById('pwHint');
+  const b1 = document.getElementById('pb1'), b2 = document.getElementById('pb2'), b3 = document.getElementById('pb3'), h = document.getElementById('pwHint');
   [b1,b2,b3].forEach(b => { b.className = 'pw-bar'; });
   if (!val) { h.textContent = 'Enter a password'; h.style.color = ''; return; }
   let score = 0;
   if (val.length >= 8) score++;
   if (/[A-Z]/.test(val) && /[a-z]/.test(val)) score++;
   if (/[0-9]/.test(val) && /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>/?`~]/.test(val)) score++;
-  const cls   = ['','w','m','s'];
-  const label = ['Too weak','Weak','Medium','Strong'];
-  const color = ['var(--red)','var(--red)','var(--amber)','var(--green)'];
+  const cls = ['','w','m','s'], label = ['Too weak','Weak','Medium','Strong'], color = ['var(--red)','var(--red)','var(--amber)','var(--green)'];
   for (let i = 0; i < score; i++) [b1,b2,b3][i].classList.add(cls[score]);
   h.textContent = label[score] || 'Too weak'; h.style.color = color[score] || 'var(--red)';
 }
@@ -197,26 +221,22 @@ function validatePasswordClient(pass) {
 }
 
 async function doRegister() {
-  const name      = document.getElementById('regName').value.trim();
-  const userId    = document.getElementById('regUserId').value.trim();
-  const email     = document.getElementById('regEmail').value.trim();
-  const pass      = document.getElementById('regPass').value;
+  const name = document.getElementById('regName').value.trim();
+  const userId = document.getElementById('regUserId').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const pass = document.getElementById('regPass').value;
   const secAnswer = document.getElementById('regSecAnswer').value.trim();
-  const err       = document.getElementById('regErr');
+  const err = document.getElementById('regErr');
   err.textContent = ''; err.style.color = 'var(--red)';
 
-  if (!name || !userId || !email || !pass || !secAnswer) { err.textContent = 'All fields are required, including the security answer.'; return; }
+  if (!name || !userId || !email || !pass || !secAnswer) { err.textContent = 'All fields are required.'; return; }
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(userId)) { err.textContent = 'Invalid User ID format.'; return; }
-
   const pwErr = validatePasswordClient(pass);
   if (pwErr) { err.textContent = pwErr; return; }
 
   const btn = document.querySelector('#form-reg .auth-btn');
   btn.disabled = true; btn.textContent = 'Creating account…';
-
-  const res = await api('POST', '/api/auth/register/send-otp', {
-    userId, name, password: pass, method: 'email', contact: email, securityAnswer: secAnswer
-  });
+  const res = await api('POST', '/api/auth/register/send-otp', { userId, name, password: pass, method: 'email', contact: email, securityAnswer: secAnswer });
   btn.disabled = false; btn.textContent = 'Create Account →';
 
   if (res.error) { err.textContent = res.error; return; }
@@ -247,27 +267,20 @@ async function verifyRegOtp() {
   const err = document.getElementById('regOtpErr');
   if (err) err.textContent = '';
   if (!otp || otp.length < 6) { if (err) err.textContent = 'Enter the 6-digit OTP.'; return; }
-
   const btn = document.querySelector('#regOtpSection .auth-btn');
   btn.disabled = true; btn.textContent = 'Verifying…';
-
   const res = await api('POST', '/api/auth/register/verify-otp', { userId: regUserId, otp });
   btn.disabled = false; btn.textContent = 'Verify & Sign In →';
-
   if (res.error) { if (err) err.textContent = res.error; return; }
   loginOk(res.user);
 }
 
 /* ══════════════════════════════════════
-   FORGOT PASSWORD — 3-step OTP flow
-   Step 1: Enter userId → OTP emailed
-   Step 2: Enter OTP → get reset token
-   Step 3: Set new password
+   FORGOT PASSWORD
 ══════════════════════════════════════ */
 async function doForgotSendOtp() {
   const userId = document.getElementById('forgotUserId').value.trim();
-  const err    = document.getElementById('forgotErr');
-  const ok     = document.getElementById('forgotOk');
+  const err = document.getElementById('forgotErr'), ok = document.getElementById('forgotOk');
   err.textContent = ''; ok.textContent = '';
   if (!userId) { err.textContent = 'Please enter your User ID.'; return; }
   const btn = document.querySelector('#forgot-step1 .auth-btn');
@@ -285,10 +298,9 @@ async function doForgotSendOtp() {
 
 async function doForgotVerifyOtp() {
   const otp = document.getElementById('forgotOtpInput').value.trim();
-  const err = document.getElementById('forgotOtpErr');
-  const ok  = document.getElementById('forgotOtpOk');
+  const err = document.getElementById('forgotOtpErr'), ok = document.getElementById('forgotOtpOk');
   err.textContent = ''; ok.textContent = '';
-  if (!otp || otp.length !== 6) { err.textContent = 'Enter the 6-digit OTP from your email.'; return; }
+  if (!otp || otp.length !== 6) { err.textContent = 'Enter the 6-digit OTP.'; return; }
   const btn = document.querySelector('#forgot-step2 .auth-btn');
   btn.disabled = true; btn.textContent = 'Verifying...';
   const res = await api('POST', '/api/auth/forgot/verify-otp', { userId: forgotResetUserId, otp });
@@ -302,12 +314,10 @@ async function doForgotVerifyOtp() {
   }, 600);
 }
 
-
 async function doForgotReset() {
   const newPass = document.getElementById('forgotNew').value;
   const confirm = document.getElementById('forgotConfirm').value;
-  const err     = document.getElementById('forgotResetErr');
-  const ok      = document.getElementById('forgotResetOk');
+  const err = document.getElementById('forgotResetErr'), ok = document.getElementById('forgotResetOk');
   err.textContent = ''; ok.textContent = '';
   if (!newPass || !confirm) { err.textContent = 'All fields are required.'; return; }
   if (newPass !== confirm)  { err.textContent = 'Passwords do not match.'; return; }
@@ -315,10 +325,7 @@ async function doForgotReset() {
   if (pwErr) { err.textContent = pwErr; return; }
   const btn = document.querySelector('#forgot-step3 .auth-btn');
   btn.disabled = true; btn.textContent = 'Resetting…';
-  const res = await api('POST', '/api/auth/forgot/reset', {
-    userId: forgotResetUserId, token: forgotResetToken,
-    newPassword: newPass, confirmPassword: confirm
-  });
+  const res = await api('POST', '/api/auth/forgot/reset', { userId: forgotResetUserId, token: forgotResetToken, newPassword: newPass, confirmPassword: confirm });
   btn.disabled = false; btn.textContent = 'Reset Password →';
   if (res.error) { err.textContent = res.error; return; }
   ok.textContent = '✓ ' + res.message;
@@ -326,26 +333,58 @@ async function doForgotReset() {
 }
 
 /* ══════════════════════════════════════
-   CHANGE PASSWORD
+   SETTINGS MODAL — Change Name + Change Password
 ══════════════════════════════════════ */
-function openPasswordModal() {
-  ['pwCurrent','pwSecAnswer','pwNew','pwConfirm'].forEach(id => {
+function openSettingsModal() {
+  // Clear all fields
+  ['pwCurrent','pwSecAnswer','pwNew','pwConfirm','newNameInput'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
-  document.getElementById('pwErr').textContent = '';
-  document.getElementById('pwOk').textContent  = '';
-  document.getElementById('passwordModal').classList.add('open');
+  ['pwErr','pwOk','nameErr','nameOk'].forEach(id => {
+    const el = document.getElementById(id); if (el) el.textContent = '';
+  });
+  // Pre-fill name
+  const nameEl = document.getElementById('newNameInput');
+  if (nameEl && CU?.name) nameEl.value = CU.name;
+  document.getElementById('settingsModal').classList.add('open');
 }
-function closePasswordModal() {
-  document.getElementById('passwordModal').classList.remove('open');
+
+function closeSettingsModal() {
+  document.getElementById('settingsModal').classList.remove('open');
 }
+
+/* Change Display Name */
+async function doChangeName() {
+  const newName = document.getElementById('newNameInput').value.trim();
+  const err = document.getElementById('nameErr'), ok = document.getElementById('nameOk');
+  err.textContent = ''; ok.textContent = '';
+  if (!newName || newName.length < 2) { err.textContent = 'Name must be at least 2 characters.'; return; }
+
+  const btns = document.querySelectorAll('#settingsModal .auth-btn');
+  const btn = btns[0]; // first button = name update
+  btn.disabled = true; btn.textContent = 'Updating…';
+
+  const res = await api('POST', '/api/auth/change-username', { newName });
+  btn.disabled = false; btn.textContent = 'Update Name →';
+
+  if (res.error) { err.textContent = res.error; return; }
+
+  // Update UI
+  if (CU) CU.name = res.name;
+  document.getElementById('userName').textContent = res.name;
+  const ini = res.name.split(' ').map(w => w[0]).join('').toUpperCase().slice(0, 2);
+  document.getElementById('userAvatar').textContent = ini;
+  ok.textContent = '✓ ' + res.message;
+  setTimeout(() => closeSettingsModal(), 1800);
+}
+
+/* Change Password */
 async function doChangePassword() {
   const current   = document.getElementById('pwCurrent').value;
   const secAnswer = document.getElementById('pwSecAnswer')?.value?.trim() || '';
   const newPass   = document.getElementById('pwNew').value;
   const confirm   = document.getElementById('pwConfirm').value;
-  const err = document.getElementById('pwErr');
-  const ok  = document.getElementById('pwOk');
+  const err = document.getElementById('pwErr'), ok = document.getElementById('pwOk');
   err.textContent = ''; ok.textContent = '';
 
   if (!current || !secAnswer || !newPass || !confirm) { err.textContent = 'All fields are required.'; return; }
@@ -353,25 +392,56 @@ async function doChangePassword() {
   const pwErr = validatePasswordClient(newPass);
   if (pwErr) { err.textContent = pwErr; return; }
 
-  const res = await api('POST', '/api/auth/change-password', {
-    currentPassword: current, securityAnswer: secAnswer,
-    newPassword: newPass, confirmPassword: confirm
-  });
+  const res = await api('POST', '/api/auth/change-password', { currentPassword: current, securityAnswer: secAnswer, newPassword: newPass, confirmPassword: confirm });
   if (res.error) { err.textContent = res.error; return; }
   ok.textContent = '✓ ' + res.message;
-  setTimeout(closePasswordModal, 2000);
+  setTimeout(closeSettingsModal, 2000);
 }
 
 /* ══════════════════════════════════════
-   SIDEBAR
+   SIDEBAR TOGGLE — works on BOTH mobile and desktop
+   Tap/click hamburger → open; tap/click again → close
 ══════════════════════════════════════ */
 function toggleSidebar() {
-  document.getElementById('sidebar').classList.toggle('open');
-  document.getElementById('ov').classList.toggle('show');
+  const sidebar = document.getElementById('sidebar');
+  const ov      = document.getElementById('ov');
+  const isMobile = window.innerWidth <= 768;
+
+  if (isMobile) {
+    // Mobile: slide in/out from left, overlay appears
+    const isOpen = sidebar.classList.contains('open');
+    if (isOpen) {
+      sidebar.classList.remove('open');
+      ov.classList.remove('show');
+    } else {
+      sidebar.classList.add('open');
+      ov.classList.add('show');
+    }
+  } else {
+    // Desktop: collapse/expand by hiding sidebar in flex layout
+    sidebar.classList.toggle('desktop-hidden');
+  }
 }
+
+// Close sidebar on mobile only (used when overlay clicked)
+function closeSidebarOverlay() {
+  if (window.innerWidth <= 768) {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('ov').classList.remove('show');
+  }
+}
+
+// Close sidebar on mobile (used internally)
+function closeSidebarMobile() {
+  if (window.innerWidth <= 768) {
+    document.getElementById('sidebar').classList.remove('open');
+    document.getElementById('ov').classList.remove('show');
+  }
+}
+
+// Legacy closeSidebar — used by chat item clicks, etc.
 function closeSidebar() {
-  document.getElementById('sidebar').classList.remove('open');
-  document.getElementById('ov').classList.remove('show');
+  closeSidebarMobile();
 }
 
 /* ══════════════════════════════════════
@@ -383,11 +453,7 @@ async function loadChatList() {
   const empty = document.getElementById('sbEmpty');
   list.querySelectorAll('.cl-label, .chat-item').forEach(e => e.remove());
 
-  if (!res.chats?.length) {
-    empty.style.display = 'block';
-    if (!activeId) showWelcome();
-    return;
-  }
+  if (!res.chats?.length) { empty.style.display = 'block'; if (!activeId) showWelcome(); return; }
   empty.style.display = 'none';
 
   const now = Date.now(), DAY = 86400000;
@@ -401,15 +467,12 @@ async function loadChatList() {
 
   Object.entries(grp).forEach(([lbl, chats]) => {
     if (!chats.length) return;
-    const l = document.createElement('div');
-    l.className = 'cl-label'; l.textContent = lbl;
+    const l = document.createElement('div'); l.className = 'cl-label'; l.textContent = lbl;
     list.appendChild(l);
     chats.forEach(c => list.appendChild(buildChatItem(c)));
   });
 
-  list.querySelectorAll('.chat-item').forEach(el =>
-    el.classList.toggle('active', el.dataset.id === activeId)
-  );
+  list.querySelectorAll('.chat-item').forEach(el => el.classList.toggle('active', el.dataset.id === activeId));
   if (!activeId && res.chats.length) switchChat(res.chats[0].id);
   else if (!activeId) showWelcome();
 }
@@ -532,7 +595,7 @@ function setLang(btn, l) {
   document.getElementById('langTag').textContent = '◎ ' + l.toLowerCase();
 }
 function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
-function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 155) + 'px'; document.getElementById('charCount').textContent = el.value.length + ' / 2000'; }
+function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 200) + 'px'; document.getElementById('charCount').textContent = el.value.length + ' / 2000'; }
 function quickAsk(t) { document.getElementById('msgInput').value = t; autoResize(document.getElementById('msgInput')); sendMessage(); }
 
 /* ══════════════════════════════════════
@@ -564,12 +627,6 @@ RULE 2 — CODE COMMENTS MUST BE VERY SIMPLE
 Inside EVERY code block, add a # comment above or on every single line explaining what that line does.
 Write comments like you are talking to a 10-year-old. Keep it ONE short sentence.
 
-BAD comment:  # iterate through the array
-GOOD comment: # Go through each number in the list one by one
-
-BAD comment:  # return result
-GOOD comment: # Send the final answer back to whoever called this function
-
 ════════════════════════════════════════════
 RULE 3 — ADD A LINE-BY-LINE EXPLANATION SECTION
 ════════════════════════════════════════════
@@ -583,103 +640,63 @@ After EVERY code block and output block, add a line-by-line explanation section 
 <li><strong>⬜ CODE</strong> <code>arr[j], arr[j+1] = arr[j+1], arr[j]</code> — This swaps two numbers. Like swapping two cards in your hand.</li>
 </ul>
 
-LABELING RULES — use these exact labels:
-- 🔷 KEYWORD → for, while, if, else, return, def, class, import, etc.
-- 🟡 FUNCTION → any function the student wrote themselves
-- 🟢 BUILT-IN → len(), print(), range(), sum(), append(), etc.
-- ⬜ CODE → any other important line of code (assignments, comparisons, etc.)
-
-Explain EVERY important line. Keep the explanation a short, friendly sentence in PLAIN ENGLISH. No jargon.
-
 ════════════════════════════════════════════
 RULE 4 — OUTPUT BLOCK FORMAT
 ════════════════════════════════════════════
-NEVER put print output inside the code block.
-ALWAYS use this exact HTML for output:
-
 <div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body">output lines here</div></div>
 
 ════════════════════════════════════════════
 RULE 5 — STEP-BY-STEP TRACE
 ════════════════════════════════════════════
-After the Easy version, add a visual trace showing HOW the algorithm works step by step:
-
-<div class="trace-block"><div class="trace-header">🔍 How It Works — Step by Step</div><div class="trace-body"><div class="trace-step"><span class="trace-n">Step 1</span><span class="trace-desc">describe clearly in plain English — like talking to a friend</span></div><div class="trace-step"><span class="trace-n">Step 2</span><span class="trace-desc">next step</span></div><div class="trace-step"><span class="trace-n">✓ Done</span><span class="trace-desc">what the final result is</span></div></div></div>
+<div class="trace-block"><div class="trace-header">🔍 How It Works — Step by Step</div><div class="trace-body"><div class="trace-step"><span class="trace-n">Step 1</span><span class="trace-desc">describe clearly</span></div></div></div>
 
 ════════════════════════════════════════════
 RULE 6 — HTML ELEMENTS TO USE
 ════════════════════════════════════════════
 - Paragraph: <p>text</p>
-- Bold word: <strong>word</strong>
-- Section heading: <h3>Heading</h3>
-- Bullet list: <ul><li>item</li></ul>
+- Bold: <strong>word</strong>
+- Heading: <h3>Heading</h3>
+- List: <ul><li>item</li></ul>
 - Code block: <pre><code data-lang="python">your code here</code></pre>
-- Inline code reference: <code>variable_name</code>
-- Time complexity: <span class="cx easy">O(n²)</span>  (or cx medium or cx hard)
-- Tip / encouragement: <div class="tipb">your tip here</div>
+- Complexity: <span class="cx easy">O(n²)</span>
+- Tip: <div class="tipb">your tip here</div>
 
 ════════════════════════════════════════════
 RULE 7 — WRITING STYLE
 ════════════════════════════════════════════
-- Write explanations like a kind, patient teacher talking to a beginner
-- Use real-world analogies (like comparing a loop to shuffling cards)
-- NEVER use words like: iterate, traverse, instantiate, invoke, implement, algorithm (unless explaining it)
-- Instead use: go through, run, create, call, step, method, recipe
+Write like a kind, patient teacher talking to a beginner. Use real-world analogies.
 
 ════════════════════════════════════════════
 RULE 8 — END EVERY RESPONSE WITH A TIP
 ════════════════════════════════════════════
-Always finish with: <div class="tipb">encouraging message for the student</div>
+<div class="tipb">encouraging message for the student</div>
 
 ════════════════════════════════════════════
-RULE 9 — ROADMAP MODE: DYNAMIC PHASE BOXES
+RULE 9 — ROADMAP MODE
 ════════════════════════════════════════════
-When in Roadmap mode, use this EXACT structure for each phase (do NOT use rmg/rs classes):
-
 <div class="rm-phase-grid">
   <div class="rm-phase-card">
-    <div class="rm-phase-head">
-      <span class="rm-phase-num">Phase 1</span>
-      <span class="rm-phase-time">⏱ 2–4 weeks</span>
-    </div>
+    <div class="rm-phase-head"><span class="rm-phase-num">Phase 1</span><span class="rm-phase-time">⏱ 2–4 weeks</span></div>
     <div class="rm-phase-title">Foundation</div>
-    <div class="rm-phase-skills">
-      <span class="rm-skill">HTML Basics</span>
-      <span class="rm-skill">CSS Selectors</span>
-      <span class="rm-skill">JavaScript Variables</span>
-    </div>
-    <div class="rm-phase-goal">By the end of this phase you will be able to build a simple web page.</div>
+    <div class="rm-phase-skills"><span class="rm-skill">HTML Basics</span></div>
+    <div class="rm-phase-goal">Goal description here.</div>
   </div>
-  <div class="rm-phase-card">
-    ... next phase ...
-  </div>
-</div>
-
-Always show 4 to 6 phases going from Beginner → Intermediate → Advanced → Expert.
-Use real skill names as rm-skill tags. The rm-phase-time should be realistic for a student learning on their own.
-After the grid, add a short motivational paragraph and a tipb box.`;
-
+</div>`;
 
 /* ══════════════════════════════════════
-   SERVICE UNAVAILABLE BANNER
+   SERVICE BANNER
 ══════════════════════════════════════ */
-
-
 function showServiceBanner(errMsg) {
-  // Remove any existing banner
   document.getElementById('serviceBanner')?.remove();
-
   const banner = document.createElement('div');
-  banner.id = 'serviceBanner';
-  banner.className = 'service-banner';
+  banner.id = 'serviceBanner'; banner.className = 'service-banner';
   banner.innerHTML = `
     <div class="sb-icon">⚡</div>
     <div class="sb-content">
       <div class="sb-title">Service Temporarily Unavailable</div>
       <div class="sb-msg">${esc(errMsg)}</div>
     </div>
-    <button class="sb-close" onclick="document.getElementById('serviceBanner')?.remove()" title="Dismiss">✕</button>
-  `;
+    <button class="sb-close" onclick="document.getElementById('serviceBanner')?.remove()" title="Dismiss">✕</button>`;
   document.getElementById('messages').appendChild(banner);
   scrollToBottom();
 }
@@ -692,9 +709,7 @@ async function sendMessage() {
   const text = inp.value.trim();
   if ((!text && !currentFile) || busy) return;
 
-  const displayTitle = text || (currentFile
-    ? `📎 ${currentFile.name.replace(/\.[^.]+$/, '')}` // Use filename without extension
-    : 'New Chat');
+  const displayTitle = text || (currentFile ? `📎 ${currentFile.name.replace(/\.[^.]+$/, '')}` : 'New Chat');
 
   if (!activeId) {
     const title = displayTitle.slice(0,50) + (displayTitle.length > 50 ? '…' : '');
@@ -714,54 +729,37 @@ async function sendMessage() {
     code:     `Give EASY and OPTIMIZED versions. Language: ${lang}.`,
     explain:  'Use a real-world analogy first, then code examples.',
     debug:    'Explain the bug in plain English first, then show the fix.',
-    roadmap:  'Give a dynamic phased roadmap using the rm-phase-grid HTML structure described in the system prompt. Show beginner → advanced phases with time estimates and skills for each.',
+    roadmap:  'Give a dynamic phased roadmap using the rm-phase-grid HTML structure. Show beginner → advanced phases.',
     optimize: 'Show original vs optimized, explain every improvement.'
   };
 
   const cd = cache[activeId];
-  // If there's a file, render a small indicator to the user
   const displayContent = currentFile ? `📎 [Attached: ${currentFile.name}]\n\n${text}` : text;
-  
   cd.rendered.push({ role: 'user', content: displayContent, isHTML: false });
   renderMessage('user', displayContent, false);
   inp.value = ''; inp.style.height = 'auto';
   document.getElementById('charCount').textContent = '0 / 2000';
-  
+
   const payloadText = text || 'Please analyze the attached file.';
   const msgPayload = { role: 'user', content: `[MODE:${mode.toUpperCase()}][LANG:${lang}]\n\n${payloadText}` };
-  if (currentFile) {
-    msgPayload.file = currentFile;
-    clearFile();
-  }
+  if (currentFile) { msgPayload.file = currentFile; clearFile(); }
   cd.history.push(msgPayload);
 
   const tid = 'ty' + Date.now();
   addTyping(tid); scrollToBottom();
 
   try {
-    const res   = await api('POST', '/api/chat', {
-      system:   SYSTEM + '\n\nMode: ' + (hints[mode] || ''),
-      messages: cd.history
-    });
-
+    const res = await api('POST', '/api/chat', { system: SYSTEM + '\n\nMode: ' + (hints[mode] || ''), messages: cd.history });
     document.getElementById(tid)?.remove();
 
-    if (res.error) {
-      // Show service unavailable banner
-      showServiceBanner(res.error);
-      busy = false;
-      document.getElementById('sendBtn').disabled = false;
-      scrollToBottom();
-      return;
-    }
+    if (res.error) { showServiceBanner(res.error); busy = false; document.getElementById('sendBtn').disabled = false; scrollToBottom(); return; }
 
     const reply = res.content?.[0]?.text || '<p>⚑ No response received.</p>';
-
     cd.history.push({ role: 'assistant', content: reply });
     cd.rendered.push({ role: 'ai', content: reply, isHTML: true });
 
-    const listRes  = await api('GET', '/api/chats');
-    const meta     = (listRes.chats || []).find(c => c.id === activeId);
+    const listRes = await api('GET', '/api/chats');
+    const meta    = (listRes.chats || []).find(c => c.id === activeId);
     const newTitle = meta?.title === 'New Chat' ? text.slice(0,50) + (text.length > 50 ? '…' : '') : meta?.title;
     await api('PUT', `/api/chats/${activeId}`, { title: newTitle, history: cd.history, rendered: cd.rendered });
 
@@ -847,20 +845,14 @@ function highlight(raw, lang) {
   };
   const k  = lang.toLowerCase().replace(/^js$/,'javascript').replace(/^ts$/,'typescript');
   const re = KW[k] || KW.javascript;
-
   const ph = [];
   const addPh = (html) => { ph.push(html); return `__CODE_PH_${ph.length - 1}__`; };
-
   s = s.replace(/(['"`])(?:(?!\1)[^\\]|\\.)*?\1/g, m => addPh(`<span class="hl-str">${m}</span>`));
   s = s.replace(/(\/\/[^\n]*|#[^\n]*|\/\*[\s\S]*?\*\/)/g, m => addPh(`<span class="hl-cmt">${m}</span>`));
   s = s.replace(/\b(\d+\.?\d*)\b/g, m => addPh(`<span class="hl-num">${m}</span>`));
   s = s.replace(re, m => addPh(`<span class="hl-kwd">${m}</span>`));
   s = s.replace(/\b([a-zA-Z_]\w*)\s*(?=\()/g, m => addPh(`<span class="hl-fun">${m}</span>`));
-
-  // Re-insert exactly what was placed, backwards so nested placeholders are correctly ordered
-  for (let i = ph.length - 1; i >= 0; i--) {
-    s = s.split(`__CODE_PH_${i}__`).join(ph[i]);
-  }
+  for (let i = ph.length - 1; i >= 0; i--) { s = s.split(`__CODE_PH_${i}__`).join(ph[i]); }
   return s;
 }
 
@@ -893,8 +885,7 @@ async function regenerate() {
 /* ══════════════════════════════════════
    ADMIN
 ══════════════════════════════════════ */
-let _adminUsers = [];
-let _viewingUid = '';
+let _adminUsers = [], _viewingUid = '';
 
 function openAdmin()  { if (CU?.role !== 'admin') return; document.getElementById('adminPanel').classList.add('open'); refreshAdmin(); }
 function closeAdmin() { document.getElementById('adminPanel').classList.remove('open'); }
@@ -902,33 +893,13 @@ function closeAdmin() { document.getElementById('adminPanel').classList.remove('
 async function refreshAdmin() {
   const res = await api('GET', '/api/admin/users');
   _adminUsers = res.users || [];
-
-  const total  = _adminUsers.length;
-  const chats  = _adminUsers.reduce((n,u) => n + (u.chatCount||0), 0);
-  const msgs   = _adminUsers.reduce((n,u) => n + (u.msgCount||0), 0);
-  const admins = _adminUsers.filter(u => u.role === 'admin').length;
+  const total = _adminUsers.length, chats = _adminUsers.reduce((n,u) => n + (u.chatCount||0), 0), msgs = _adminUsers.reduce((n,u) => n + (u.msgCount||0), 0), admins = _adminUsers.filter(u => u.role === 'admin').length;
 
   document.getElementById('adminStats').innerHTML = `
-    <div class="stat-card amber">
-      <div class="stat-icon-wrap"><div class="stat-icon-bg amber-bg">👥</div></div>
-      <div class="stat-content"><div class="stat-value">${total}</div><div class="stat-label">Total Users</div></div>
-      <div class="stat-glow amber-glow"></div>
-    </div>
-    <div class="stat-card green">
-      <div class="stat-icon-wrap"><div class="stat-icon-bg green-bg">💬</div></div>
-      <div class="stat-content"><div class="stat-value">${chats}</div><div class="stat-label">Total Chats</div></div>
-      <div class="stat-glow green-glow"></div>
-    </div>
-    <div class="stat-card blue">
-      <div class="stat-icon-wrap"><div class="stat-icon-bg blue-bg">✉</div></div>
-      <div class="stat-content"><div class="stat-value">${msgs}</div><div class="stat-label">Messages Sent</div></div>
-      <div class="stat-glow blue-glow"></div>
-    </div>
-    <div class="stat-card purple">
-      <div class="stat-icon-wrap"><div class="stat-icon-bg purple-bg">⬡</div></div>
-      <div class="stat-content"><div class="stat-value">${admins}</div><div class="stat-label">Admins</div></div>
-      <div class="stat-glow purple-glow"></div>
-    </div>`;
+    <div class="stat-card amber"><div class="stat-icon-wrap"><div class="stat-icon-bg amber-bg">👥</div></div><div class="stat-content"><div class="stat-value">${total}</div><div class="stat-label">Total Users</div></div><div class="stat-glow amber-glow"></div></div>
+    <div class="stat-card green"><div class="stat-icon-wrap"><div class="stat-icon-bg green-bg">💬</div></div><div class="stat-content"><div class="stat-value">${chats}</div><div class="stat-label">Total Chats</div></div><div class="stat-glow green-glow"></div></div>
+    <div class="stat-card blue"><div class="stat-icon-wrap"><div class="stat-icon-bg blue-bg">✉</div></div><div class="stat-content"><div class="stat-value">${msgs}</div><div class="stat-label">Messages Sent</div></div><div class="stat-glow blue-glow"></div></div>
+    <div class="stat-card purple"><div class="stat-icon-wrap"><div class="stat-icon-bg purple-bg">⬡</div></div><div class="stat-content"><div class="stat-value">${admins}</div><div class="stat-label">Admins</div></div><div class="stat-glow purple-glow"></div></div>`;
 
   const now = Date.now();
   const events = [];
@@ -938,19 +909,11 @@ async function refreshAdmin() {
   });
   events.sort((a,b) => b.ts - a.ts);
   document.getElementById('activityList').innerHTML = events.slice(0,8).map(e => `
-    <div class="activity-item">
-      <div class="act-dot ${e.dot}"></div>
-      <div class="act-text">${e.text}</div>
-      <div class="act-time">${timeAgo(e.ts)}</div>
-    </div>`).join('') || '<div style="padding:14px;font-family:var(--mono);font-size:11px;color:var(--t3)">No activity.</div>';
+    <div class="activity-item"><div class="act-dot ${e.dot}"></div><div class="act-text">${e.text}</div><div class="act-time">${timeAgo(e.ts)}</div></div>`).join('') || '<div style="padding:14px;font-family:var(--mono);font-size:11px;color:var(--t3)">No activity.</div>';
 
   document.getElementById('topUsersBody').innerHTML =
     [..._adminUsers].sort((a,b) => b.chatCount - a.chatCount).slice(0,5)
-      .map((u,i) => `<tr>
-        <td><div class="top-user-row"><span class="rank-badge">${['①','②','③','④','⑤'][i]}</span>${esc(u.name)}</div></td>
-        <td class="td-mono"><span class="badge-count">${u.chatCount}</span></td>
-        <td class="td-mono"><span class="badge-count">${u.msgCount}</span></td>
-      </tr>`).join('');
+      .map((u,i) => `<tr><td><div class="top-user-row"><span class="rank-badge">${['①','②','③','④','⑤'][i]}</span>${esc(u.name)}</div></td><td class="td-mono"><span class="badge-count">${u.chatCount}</span></td><td class="td-mono"><span class="badge-count">${u.msgCount}</span></td></tr>`).join('');
 
   renderUserTable(_adminUsers);
 }
@@ -964,13 +927,11 @@ function renderUserTable(users) {
     <td class="td-mono"><span class="badge-count">${u.chatCount}</span></td>
     <td class="td-mono"><span class="badge-count">${u.msgCount}</span></td>
     <td class="td-mono">${new Date(u.joined).toLocaleDateString()}</td>
-    <td>
-      <div class="action-btns">
-        <button class="tbl-btn view-btn" onclick="viewUserMessages('${esc(u.userId||u.email)}','${esc(u.name)}')">👁 View</button>
-        ${u.role !== 'admin' ? `<button class="tbl-btn" onclick="promoteUser('${esc(u.userId||u.email)}')">⬡ Promote</button>` : `<button class="tbl-btn" onclick="demoteUser('${esc(u.userId||u.email)}')">↓ Demote</button>`}
-        ${(u.userId || u.email) !== (CU?.userId || CU?.email) ? `<button class="tbl-btn del" onclick="deleteUser('${esc(u.userId||u.email)}')">✕ Delete</button>` : ''}
-      </div>
-    </td>
+    <td><div class="action-btns">
+      <button class="tbl-btn view-btn" onclick="viewUserMessages('${esc(u.userId||u.email)}','${esc(u.name)}')">👁 View</button>
+      ${u.role !== 'admin' ? `<button class="tbl-btn" onclick="promoteUser('${esc(u.userId||u.email)}')">⬡ Promote</button>` : `<button class="tbl-btn" onclick="demoteUser('${esc(u.userId||u.email)}')">↓ Demote</button>`}
+      ${(u.userId||u.email) !== (CU?.userId||CU?.email) ? `<button class="tbl-btn del" onclick="deleteUser('${esc(u.userId||u.email)}')">✕ Delete</button>` : ''}
+    </div></td>
   </tr>`).join('');
 }
 
@@ -982,56 +943,33 @@ async function promoteUser(id) { if (!confirm(`Promote ${id} to admin?`)) return
 async function demoteUser(id)  { if (!confirm(`Demote ${id}?`)) return; await api('PUT', `/api/admin/users/${id}/role`, { role:'user' }); refreshAdmin(); }
 async function deleteUser(id)  { if (!confirm(`Delete ${id} and all their data?`)) return; await api('DELETE', `/api/admin/users/${id}`); refreshAdmin(); }
 
-/* ── ADMIN: VIEW USER MESSAGES ── */
 async function viewUserMessages(uid, name) {
   _viewingUid = uid;
   document.getElementById('msgViewerTitle').textContent = `${name}'s Conversations`;
   document.getElementById('msgViewerSubtitle').textContent = `@${uid}`;
   document.getElementById('msgViewerBody').innerHTML = `<div style="padding:24px;text-align:center;color:var(--t3)">Loading…</div>`;
   document.getElementById('msgViewerModal').classList.add('open');
-
   const res = await api('GET', `/api/admin/users/${uid}/messages`);
-  if (res.error) {
-    document.getElementById('msgViewerBody').innerHTML = `<div style="padding:24px;color:var(--red)">${res.error}</div>`;
-    return;
-  }
-
+  if (res.error) { document.getElementById('msgViewerBody').innerHTML = `<div style="padding:24px;color:var(--red)">${res.error}</div>`; return; }
   const chats = res.chats || [];
-  if (!chats.length) {
-    document.getElementById('msgViewerBody').innerHTML = `<div style="padding:24px;text-align:center;color:var(--t3)">No conversations yet.</div>`;
-    return;
-  }
-
+  if (!chats.length) { document.getElementById('msgViewerBody').innerHTML = `<div style="padding:24px;text-align:center;color:var(--t3)">No conversations yet.</div>`; return; }
   document.getElementById('msgViewerBody').innerHTML = chats.map(chat => `
     <div class="msg-chat-block">
-      <div class="msg-chat-header">
-        <span class="msg-chat-title">💬 ${esc(chat.title)}</span>
-        <span class="msg-chat-date">${new Date(chat.ts).toLocaleDateString('en-IN', { day:'numeric', month:'short', year:'numeric' })}</span>
-      </div>
+      <div class="msg-chat-header"><span class="msg-chat-title">💬 ${esc(chat.title)}</span><span class="msg-chat-date">${new Date(chat.ts).toLocaleDateString('en-IN',{day:'numeric',month:'short',year:'numeric'})}</span></div>
       <div class="msg-chat-messages">
-        ${(chat.messages||[]).map(m => `
-          <div class="msg-row ${m.role}">
-            <div class="msg-role-badge ${m.role}">${m.role === 'user' ? '👤 User' : '⚡ AI'}</div>
-            <div class="msg-content-text">${esc(m.content).replace(/\n/g,'<br>')}</div>
-          </div>`).join('') || '<div style="padding:12px;color:var(--t3);font-size:12px">No messages.</div>'}
+        ${(chat.messages||[]).map(m => `<div class="msg-row ${m.role}"><div class="msg-role-badge ${m.role}">${m.role==='user'?'👤 User':'⚡ AI'}</div><div class="msg-content-text">${esc(m.content).replace(/\n/g,'<br>')}</div></div>`).join('') || '<div style="padding:12px;color:var(--t3);font-size:12px">No messages.</div>'}
       </div>
     </div>`).join('');
 }
 
-function closeMsgViewer() {
-  document.getElementById('msgViewerModal').classList.remove('open');
-  _viewingUid = '';
-}
-
-function downloadUserMessages() {
-  if (!_viewingUid) return;
-  window.open(`/api/admin/users/${_viewingUid}/messages/download`, '_blank');
-}
+function closeMsgViewer() { document.getElementById('msgViewerModal').classList.remove('open'); _viewingUid = ''; }
+function downloadUserMessages() { if (!_viewingUid) return; window.open(`/api/admin/users/${_viewingUid}/messages/download`, '_blank'); }
 
 function timeAgo(ts) {
   const s = Math.floor((Date.now() - ts) / 1000);
-  if (s < 60)    return 'just now';
-  if (s < 3600)  return Math.floor(s/60) + 'm ago';
+  if (s < 60) return 'just now';
+  if (s < 3600) return Math.floor(s/60) + 'm ago';
   if (s < 86400) return Math.floor(s/3600) + 'h ago';
   return Math.floor(s/86400) + 'd ago';
 }
+
