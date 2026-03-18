@@ -10,16 +10,39 @@ const mongoose    = require('mongoose');
 const helmet      = require('helmet');
 const rateLimit   = require('express-rate-limit');
 
-const app  = express();
+const app = express();
 app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 3000;
 
-const GEMINI_KEY   = process.env.GEMINI_API_KEY  || '';
-const BREVO_KEY    = process.env.BREVO_API_KEY    || '';
-const SENDER_EMAIL = process.env.SENDER_EMAIL     || '';
-const SENDER_NAME  = process.env.SENDER_NAME      || 'CodeMentor AI';
-const FAST2SMS_KEY = process.env.FAST2SMS_KEY     || '';
+/* ───────────────────────────────────────
+   MULTIPLE GEMINI KEY ROTATION
+   Add in Render env:
+   GEMINI_API_KEY_1, GEMINI_API_KEY_2,
+   GEMINI_API_KEY_3, GEMINI_API_KEY_4,
+   GEMINI_API_KEY_5
+─────────────────────────────────────── */
+const GEMINI_KEYS = [
+  process.env.GEMINI_API_KEY_1,
+  process.env.GEMINI_API_KEY_2,
+  process.env.GEMINI_API_KEY_3,
+  process.env.GEMINI_API_KEY_4,
+  process.env.GEMINI_API_KEY_5,
+  process.env.GEMINI_API_KEY, // backward compat
+].filter(Boolean);
+
+let geminiKeyIndex = 0;
+function getGeminiKey() {
+  if (!GEMINI_KEYS.length) return null;
+  const key = GEMINI_KEYS[geminiKeyIndex];
+  geminiKeyIndex = (geminiKeyIndex + 1) % GEMINI_KEYS.length;
+  return key;
+}
+
+const BREVO_KEY    = process.env.BREVO_API_KEY || '';
+const SENDER_EMAIL = process.env.SENDER_EMAIL  || '';
+const SENDER_NAME  = process.env.SENDER_NAME   || 'CodeMentor AI';
+const FAST2SMS_KEY = process.env.FAST2SMS_KEY  || '';
 
 /* ───────────────────────────────────────
    MONGODB CONNECTION
@@ -100,12 +123,12 @@ const safe = u => {
 };
 
 function validatePassword(password) {
-  if (password.length < 8)                          return 'Password must be at least 8 characters.';
-  if (!/[A-Z]/.test(password))                     return 'Password must contain at least one uppercase letter.';
-  if (!/[a-z]/.test(password))                     return 'Password must contain at least one lowercase letter.';
-  if (!/[0-9]/.test(password))                     return 'Password must contain at least one number.';
+  if (password.length < 8)             return 'Password must be at least 8 characters.';
+  if (!/[A-Z]/.test(password))         return 'Password must contain at least one uppercase letter.';
+  if (!/[a-z]/.test(password))         return 'Password must contain at least one lowercase letter.';
+  if (!/[0-9]/.test(password))         return 'Password must contain at least one number.';
   if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password))
-    return 'Password must contain at least one special character (!@#$%...).';
+    return 'Password must contain at least one special character.';
   return null;
 }
 
@@ -115,6 +138,8 @@ async function isPasswordReused(password, history = []) {
   }
   return false;
 }
+
+const isMain = (sessionUser) => sessionUser?.userId === 'admin';
 
 /* ───────────────────────────────────────
    OTP HELPERS
@@ -126,7 +151,6 @@ async function sendEmailOTP(to, otp, purpose) {
     console.log(`\n📧  [DEV] Email OTP for ${to} → ${otp}\n`);
     return;
   }
-
   const body = JSON.stringify({
     sender: { name: SENDER_NAME, email: SENDER_EMAIL },
     to: [{ email: to }],
@@ -143,17 +167,10 @@ async function sendEmailOTP(to, otp, purpose) {
       <p style="color:#555;font-size:11px">Valid for 10 minutes. Do not share this OTP.</p>
     </div>`
   });
-
   await new Promise((resolve, reject) => {
     const req = https.request({
-      hostname: 'api.brevo.com',
-      path: '/v3/smtp/email',
-      method: 'POST',
-      headers: {
-        'api-key': BREVO_KEY,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(body)
-      }
+      hostname: 'api.brevo.com', path: '/v3/smtp/email', method: 'POST',
+      headers: { 'api-key': BREVO_KEY, 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
     }, res => {
       let d = '';
       res.on('data', c => d += c);
@@ -163,15 +180,12 @@ async function sendEmailOTP(to, otp, purpose) {
       });
     });
     req.on('error', reject);
-    req.write(body);
-    req.end();
+    req.write(body); req.end();
   });
 }
 
 async function sendPhoneOTP(phone, otp) {
-  if (!FAST2SMS_KEY) {
-    console.log(`\n📱  [DEV] Phone OTP for ${phone} → ${otp}\n`); return;
-  }
+  if (!FAST2SMS_KEY) { console.log(`\n📱  [DEV] Phone OTP for ${phone} → ${otp}\n`); return; }
   const msg = `Your CodeMentor AI OTP is ${otp}. Valid for 10 minutes.`;
   const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${FAST2SMS_KEY}&route=q&message=${encodeURIComponent(msg)}&language=english&flash=0&numbers=${phone}`;
   await new Promise((res, rej) => {
@@ -187,8 +201,8 @@ function storeOTP(key, otp, extra = {}) {
 
 function checkOTP(key, otp) {
   const r = otpStore.get(key);
-  if (!r)                           return 'No OTP found. Please request again.';
-  if (Date.now() > r.expires)      { otpStore.delete(key); return 'OTP expired. Please request a new one.'; }
+  if (!r) return 'No OTP found. Please request again.';
+  if (Date.now() > r.expires) { otpStore.delete(key); return 'OTP expired. Please request a new one.'; }
   if (r.otp !== String(otp).trim()) return 'Incorrect OTP. Please try again.';
   const data = { ...r }; otpStore.delete(key); return { ok: true, data };
 }
@@ -203,7 +217,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use((req, res, next) => {
   const ext = path.extname(req.path).toLowerCase();
   if ((ext === '.js' || ext === '.css') && req.headers['sec-fetch-dest'] === 'document') {
-    return res.status(403).send('<html><head><title>Forbidden</title></head><body style="background:#0d0d0d;color:#ef4444;font-family:monospace;padding:40px;text-align:center;"><h2>&#x26A0;&#xFE0F; 403 Forbidden</h2><p>Direct access to source files is not allowed.</p></body></html>');
+    return res.status(403).send('<html><body style="background:#0d0d0d;color:#ef4444;font-family:monospace;padding:40px;text-align:center"><h2>403 Forbidden</h2></body></html>');
   }
   next();
 });
@@ -223,13 +237,12 @@ const authLimiter = rateLimit({
 
 const forgotLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 5,
-  message: { error: 'Too many reset attempts. Please wait 15 minutes before trying again.' },
+  message: { error: 'Too many reset attempts. Please wait 15 minutes.' },
   standardHeaders: true, legacyHeaders: false
 });
 
-const auth      = (q, s, n) => q.session.user ? n() : s.status(401).json({ error: 'Not authenticated' });
-const admin     = (q, s, n) => q.session.user?.role === 'admin' ? n() : s.status(403).json({ error: 'Forbidden' });
-const isMain    = (sessionUser) => sessionUser?.userId === 'admin'; // main admin check
+const auth  = (q, s, n) => q.session.user ? n() : s.status(401).json({ error: 'Not authenticated' });
+const admin = (q, s, n) => q.session.user?.role === 'admin' ? n() : s.status(403).json({ error: 'Forbidden' });
 
 /* ───────────────────────────────────────
    REGISTER
@@ -243,31 +256,24 @@ app.post('/api/auth/register/send-otp', authLimiter, async (req, res) => {
 
   const pwErr = validatePassword(password);
   if (pwErr) return res.status(400).json({ error: pwErr });
-
   if (method === 'email' && !/\S+@\S+\.\S+/.test(contact))
     return res.status(400).json({ error: 'Enter a valid email address.' });
   if (method === 'phone' && !/^\d{10}$/.test(contact))
     return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
 
   const key = userId.toLowerCase();
-
   const existing = await User.findOne({ userId: key });
-  if (existing) return res.status(400).json({ error: 'This User ID is already taken. Please choose another.' });
+  if (existing) return res.status(400).json({ error: 'This User ID is already taken.' });
 
   const dupContact = await User.findOne(method === 'email' ? { email: contact } : { phone: contact });
   if (dupContact) return res.status(400).json({ error: `This ${method} is already registered.` });
 
-  const otp    = genOTP();
-  const otpKey = `reg_${key}`;
-  storeOTP(otpKey, otp, { pending: { userId: key, name: name.trim(), password, method, contact, securityAnswer } });
-
+  const otp = genOTP();
+  storeOTP(`reg_${key}`, otp, { pending: { userId: key, name: name.trim(), password, method, contact, securityAnswer } });
   res.json({ success: true, message: `OTP sent to your ${method}.` });
 
-  if (method === 'email') {
-    sendEmailOTP(contact, otp, 'register').catch(e => console.error('Email OTP error:', e.message));
-  } else {
-    sendPhoneOTP(contact, otp).catch(e => console.error('Phone OTP error:', e.message));
-  }
+  if (method === 'email') sendEmailOTP(contact, otp, 'register').catch(e => console.error('Email OTP error:', e.message));
+  else sendPhoneOTP(contact, otp).catch(e => console.error('Phone OTP error:', e.message));
 });
 
 app.post('/api/auth/register/verify-otp', authLimiter, async (req, res) => {
@@ -275,9 +281,7 @@ app.post('/api/auth/register/verify-otp', authLimiter, async (req, res) => {
   if (!userId || !otp) return res.status(400).json({ error: 'Missing fields.' });
 
   const key    = userId.toLowerCase();
-  const otpKey = `reg_${key}`;
-  const result = checkOTP(otpKey, otp);
-
+  const result = checkOTP(`reg_${key}`, otp);
   if (typeof result === 'string') return res.status(400).json({ error: result });
 
   const { pending } = result.data;
@@ -323,6 +327,25 @@ app.post('/api/auth/logout', (req, res) => req.session.destroy(() => res.json({ 
 app.get('/api/auth/me', auth, (req, res) => res.json({ user: req.session.user }));
 
 /* ───────────────────────────────────────
+   CHANGE USERNAME
+─────────────────────────────────────── */
+app.post('/api/auth/change-username', auth, async (req, res) => {
+  const { newName } = req.body;
+  if (!newName || newName.trim().length < 2)
+    return res.status(400).json({ error: 'Name must be at least 2 characters.' });
+  if (newName.trim().length > 40)
+    return res.status(400).json({ error: 'Name must be under 40 characters.' });
+
+  const user = await User.findOne({ userId: req.session.user.userId });
+  if (!user) return res.status(404).json({ error: 'User not found.' });
+
+  user.name = newName.trim();
+  await user.save();
+  req.session.user = safe(user);
+  res.json({ success: true, name: user.name, message: 'Name updated successfully.' });
+});
+
+/* ───────────────────────────────────────
    FORGOT PASSWORD
 ─────────────────────────────────────── */
 app.post('/api/auth/forgot/send-otp', forgotLimiter, async (req, res) => {
@@ -337,7 +360,6 @@ app.post('/api/auth/forgot/send-otp', forgotLimiter, async (req, res) => {
 
   const otp = genOTP();
   otpStore.set(`fpw_${userId.toLowerCase()}`, { otp, expires: Date.now() + 10 * 60 * 1000 });
-
   res.json({ success: true, message: `OTP sent to your registered email.` });
 
   const contact = user.email || user.phone;
@@ -354,9 +376,9 @@ app.post('/api/auth/forgot/verify-otp', forgotLimiter, async (req, res) => {
 
   const key    = `fpw_${userId.toLowerCase().trim()}`;
   const stored = otpStore.get(key);
-  if (!stored)                      return res.status(400).json({ error: 'No OTP found. Please request a new one.' });
-  if (Date.now() > stored.expires) { otpStore.delete(key); return res.status(400).json({ error: 'OTP expired. Please request a new one.' }); }
-  if (stored.otp !== String(otp).trim()) return res.status(400).json({ error: 'Incorrect OTP. Please try again.' });
+  if (!stored) return res.status(400).json({ error: 'No OTP found. Please request a new one.' });
+  if (Date.now() > stored.expires) { otpStore.delete(key); return res.status(400).json({ error: 'OTP expired.' }); }
+  if (stored.otp !== String(otp).trim()) return res.status(400).json({ error: 'Incorrect OTP.' });
   otpStore.delete(key);
 
   const token = uuidv4();
@@ -384,7 +406,7 @@ app.post('/api/auth/forgot/reset', forgotLimiter, async (req, res) => {
   if (!user) return res.status(404).json({ error: 'No account found.' });
 
   if (await isPasswordReused(newPassword, user.passwordHistory))
-    return res.status(400).json({ error: 'You cannot reuse a recent password. Please choose a different one.' });
+    return res.status(400).json({ error: 'You cannot reuse a recent password.' });
 
   const hashed = await bcrypt.hash(newPassword, 10);
   user.password = hashed;
@@ -400,7 +422,7 @@ app.post('/api/auth/change-password', auth, async (req, res) => {
   const { currentPassword, securityAnswer, newPassword, confirmPassword } = req.body;
 
   if (req.session.user?.userId === 'admin')
-    return res.status(403).json({ error: 'Admin password can only be changed via ADMIN_PASSWORD in the .env file.' });
+    return res.status(403).json({ error: 'Admin password can only be changed via ADMIN_PASSWORD in .env.' });
 
   if (!currentPassword || !securityAnswer || !newPassword || !confirmPassword)
     return res.status(400).json({ error: 'All fields are required.' });
@@ -419,10 +441,10 @@ app.post('/api/auth/change-password', auth, async (req, res) => {
   if (!user.securityAnswer)
     return res.status(400).json({ error: 'No security question set on this account.' });
   const ansMatch = await bcrypt.compare(securityAnswer.toLowerCase().trim(), user.securityAnswer);
-  if (!ansMatch) return res.status(400).json({ error: 'Incorrect security answer. Please try again.' });
+  if (!ansMatch) return res.status(400).json({ error: 'Incorrect security answer.' });
 
   if (await isPasswordReused(newPassword, user.passwordHistory))
-    return res.status(400).json({ error: 'You cannot reuse a recent password. Please choose a different one.' });
+    return res.status(400).json({ error: 'You cannot reuse a recent password.' });
 
   const hashed = await bcrypt.hash(newPassword, 10);
   user.password = hashed;
@@ -440,10 +462,7 @@ app.get('/api/chats', auth, async (req, res) => {
 });
 
 app.post('/api/chats', auth, async (req, res) => {
-  const c = await Chat.create({
-    ownerId: req.session.user.id,
-    title: (req.body.title || 'New Chat').slice(0, 80)
-  });
+  const c = await Chat.create({ ownerId: req.session.user.id, title: (req.body.title || 'New Chat').slice(0, 80) });
   res.json({ chat: { id: c.chatId, title: c.title, ts: c.ts } });
 });
 
@@ -504,8 +523,7 @@ app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req, res)
     exportedAt: new Date().toISOString(),
     user: { userId: user.userId, name: user.name, email: user.email },
     chats: chats.map(c => ({
-      chatId: c.chatId, title: c.title,
-      date: new Date(c.ts).toISOString(),
+      chatId: c.chatId, title: c.title, date: new Date(c.ts).toISOString(),
       messages: (c.history || []).map(m => ({
         role: m.role,
         content: m.content ? m.content.replace(/^\[MODE:[^\]]+\]\[LANG:[^\]]+\]\n\n/, '') : ''
@@ -520,55 +538,41 @@ app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req, res)
 /* ───────────────────────────────────────
    ROLE CHANGE RULES:
    - Nobody can change their own role
-   - Nobody can change main admin's role
-   - Sub-admins CANNOT promote/demote other admins
+   - Nobody can change main admin role
+   - Sub-admins CANNOT demote other admins
    - Only main admin CAN demote sub-admins
 ─────────────────────────────────────── */
 app.put('/api/admin/users/:uid/role', auth, admin, async (req, res) => {
   const { role } = req.body;
-  if (!['admin', 'user'].includes(role))
-    return res.status(400).json({ error: 'Invalid role.' });
+  if (!['admin', 'user'].includes(role)) return res.status(400).json({ error: 'Invalid role.' });
 
   const u = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-
-  // Cannot change your own role
   if (u.userId === req.session.user.userId)
     return res.status(400).json({ error: 'Cannot change your own role.' });
-
-  // Nobody can touch main admin
   if (u.userId === 'admin')
-    return res.status(403).json({ error: 'Main admin role cannot be changed by anyone.' });
-
-  // Sub-admins cannot touch other admins — only main admin can
+    return res.status(403).json({ error: 'Main admin role cannot be changed.' });
   if (u.role === 'admin' && !isMain(req.session.user))
     return res.status(403).json({ error: 'Only the main admin can demote other admins.' });
 
-  u.role = role;
-  await u.save();
+  u.role = role; await u.save();
   res.json({ success: true });
 });
 
 /* ───────────────────────────────────────
    DELETE RULES:
    - Nobody can delete themselves
-   - Nobody can delete main admin (ever)
+   - Main admin can never be deleted
    - Sub-admins CANNOT delete other admins
    - Only main admin CAN delete sub-admins
 ─────────────────────────────────────── */
 app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   const u = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-
-  // Cannot delete yourself
   if (u.userId === req.session.user.userId)
     return res.status(400).json({ error: 'Cannot delete yourself.' });
-
-  // Main admin can never be deleted
   if (u.userId === 'admin')
     return res.status(403).json({ error: 'Main admin cannot be deleted.' });
-
-  // Sub-admins cannot delete other admins — only main admin can
   if (u.role === 'admin' && !isMain(req.session.user))
     return res.status(403).json({ error: 'Only the main admin can delete other admins.' });
 
@@ -577,10 +581,15 @@ app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   res.json({ success: true });
 });
 
-let activeModel = null;
-
+/* ───────────────────────────────────────
+   CHAT — Multiple Gemini Key Rotation
+   Rotates keys on every request
+   On 429 rate limit → tries next key
+─────────────────────────────────────── */
 app.post('/api/chat', auth, async (req, res) => {
-  if (!GEMINI_KEY) return res.status(500).json({ error: 'GEMINI_API_KEY not set in .env' });
+  if (!GEMINI_KEYS.length)
+    return res.status(500).json({ error: 'No GEMINI_API_KEY set in environment.' });
+
   const { system, messages } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
 
@@ -600,16 +609,16 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   const hasImage    = messages.some(m => m.file && m.file.data);
-  const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
+  const modelsToTry = ['gemini-2.5-flash', 'gemini-2.0-flash'];
 
-  const callGemini = (model) => new Promise((resolve, reject) => {
-    const requestTimeout = hasImage ? 90000 : 30000;
+  const callGemini = (model, apiKey) => new Promise((resolve, reject) => {
+    const timeout = hasImage ? 90000 : 30000;
     const opts = {
       hostname: 'generativelanguage.googleapis.com',
-      path: `/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`,
+      path: `/v1beta/models/${model}:generateContent?key=${apiKey}`,
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
-      timeout: requestTimeout
+      timeout
     };
     const apiReq = https.request(opts, apiRes => {
       let data = '';
@@ -618,33 +627,37 @@ app.post('/api/chat', auth, async (req, res) => {
     });
     apiReq.on('timeout', () => { apiReq.destroy(); reject(new Error('Timeout')); });
     apiReq.on('error', e => reject(e));
-    apiReq.write(payload);
-    apiReq.end();
+    apiReq.write(payload); apiReq.end();
   });
 
   let lastError = 'No response from AI.';
 
   for (const model of modelsToTry) {
-    try {
-      const response = await callGemini(model);
-      if (response.status === 200) {
-        const p = JSON.parse(response.data);
-        if (p.candidates?.[0]?.content?.parts?.[0]?.text) {
-          activeModel = model;
-          return res.json({ content: [{ type: 'text', text: p.candidates[0].content.parts[0].text }] });
+    for (let i = 0; i < GEMINI_KEYS.length; i++) {
+      const apiKey = getGeminiKey();
+      try {
+        const response = await callGemini(model, apiKey);
+        if (response.status === 200) {
+          const p = JSON.parse(response.data);
+          if (p.candidates?.[0]?.content?.parts?.[0]?.text) {
+            return res.json({ content: [{ type: 'text', text: p.candidates[0].content.parts[0].text }] });
+          }
+        } else if (response.status === 429) {
+          console.warn(`[Key ${i+1}/${GEMINI_KEYS.length}][${model}] Rate limited, trying next key...`);
+          continue;
+        } else {
+          try {
+            const errObj = JSON.parse(response.data);
+            lastError = errObj.error?.message || `${model} failed with status ${response.status}`;
+          } catch {
+            lastError = `${model} returned status ${response.status}`;
+          }
+          console.warn(`[Key ${i+1}][${model}] Error:`, lastError);
         }
-      } else {
-        try {
-          const errObj = JSON.parse(response.data);
-          lastError = errObj.error?.message || `Model ${model} failed with status ${response.status}`;
-        } catch {
-          lastError = `Model ${model} returned unparsable error with status ${response.status}`;
-        }
-        console.warn(`[Fallback] ${model} failed, trying next... Error:`, lastError);
+      } catch (err) {
+        lastError = err.message || 'Network error';
+        console.warn(`[Key ${i+1}][${model}] Exception:`, lastError);
       }
-    } catch (err) {
-      lastError = err.message || 'Unknown network error';
-      console.warn(`[Fallback] ${model} errored, trying next... Error:`, lastError);
     }
   }
 
@@ -660,6 +673,8 @@ mongoose.connection.once('open', async () => {
   await seedAdmin();
   app.listen(PORT, () => {
     console.log(`\n⚡  CodeMentor AI → http://localhost:${PORT}`);
-    if (!BREVO_KEY) console.log(`    📧  Email OTP → [DEV mode, add BREVO_API_KEY to env]`);
+    console.log(`    🔑  Gemini keys loaded: ${GEMINI_KEYS.length}`);
+    if (!BREVO_KEY) console.log(`    📧  Email OTP → [DEV mode, add BREVO_API_KEY]`);
   });
 });
+
