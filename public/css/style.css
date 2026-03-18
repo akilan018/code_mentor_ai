@@ -1199,7 +1199,7 @@ tbody td { padding: 10px 14px; font-size: 12.5px; color: var(--t); vertical-alig
 /* ══ MOBILE — smaller topbar mode pills ══ */
 @media (max-width: 600px) {
   .topbar { padding: 0 12px; }
-  .tb-right .top-btn { display: none; }
+  .tb-right .top-btn:not(.admin-top) { display: none; }
   .chat-title-display { max-width: 120px; font-size: 11px; }
 }
 
