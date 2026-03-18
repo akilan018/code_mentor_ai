@@ -4,26 +4,22 @@ const express     = require('express');
 const session     = require('express-session');
 const bcrypt      = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
-const nodemailer  = require('nodemailer');
 const path        = require('path');
 const https       = require('https');
 const mongoose    = require('mongoose');
 const helmet      = require('helmet');
 const rateLimit   = require('express-rate-limit');
-const dns         = require('dns');
-
-// Force IPv4 for external connections (fixes nodemailer IPv6 ENETUNREACH error on Render)
-dns.setDefaultResultOrder('ipv4first');
 
 const app  = express();
-app.set('trust proxy', 1); // Trust Render's load balancer for rate limiting
+app.set('trust proxy', 1);
 
 const PORT = process.env.PORT || 3000;
 
-const GEMINI_KEY   = process.env.GEMINI_API_KEY || '';
-const GMAIL_USER   = process.env.GMAIL_USER     || '';
-const GMAIL_PASS   = process.env.GMAIL_PASS     || '';
-const FAST2SMS_KEY = process.env.FAST2SMS_KEY   || '';
+const GEMINI_KEY   = process.env.GEMINI_API_KEY  || '';
+const BREVO_KEY    = process.env.BREVO_API_KEY    || '';
+const SENDER_EMAIL = process.env.SENDER_EMAIL     || '';
+const SENDER_NAME  = process.env.SENDER_NAME      || 'CodeMentor AI';
+const FAST2SMS_KEY = process.env.FAST2SMS_KEY     || '';
 
 /* ───────────────────────────────────────
    MONGODB CONNECTION
@@ -42,11 +38,11 @@ const userSchema = new mongoose.Schema({
   email:          { type: String, default: '' },
   phone:          { type: String, default: '' },
   password:       { type: String, required: true },
-  passwordHistory:{ type: [String], default: [] },   // last 5 hashed passwords
+  passwordHistory:{ type: [String], default: [] },
   role:           { type: String, enum: ['admin','user'], default: 'user' },
   verified:       { type: Boolean, default: false },
   method:         { type: String, default: 'email' },
-  securityAnswer: { type: String, default: '' },     // bcrypt-hashed answer
+  securityAnswer: { type: String, default: '' },
   joined:         { type: Number, default: Date.now },
   lastSeen:       { type: Number, default: Date.now }
 });
@@ -54,7 +50,7 @@ const User = mongoose.model('User', userSchema);
 
 const chatSchema = new mongoose.Schema({
   chatId:   { type: String, default: () => uuidv4() },
-  ownerId:  { type: String, required: true },        // user.id (uuid)
+  ownerId:  { type: String, required: true },
   title:    { type: String, default: 'New Chat' },
   ts:       { type: Number, default: Date.now },
   history:  { type: mongoose.Schema.Types.Mixed, default: [] },
@@ -62,7 +58,7 @@ const chatSchema = new mongoose.Schema({
 });
 const Chat = mongoose.model('Chat', chatSchema);
 
-const otpStore = new Map(); // in-memory OTP store (keyed by string)
+const otpStore = new Map();
 
 /* ───────────────────────────────────────
    SEED ADMIN
@@ -71,9 +67,7 @@ async function seedAdmin() {
   try {
     const adminPwd = process.env.ADMIN_PASSWORD;
     const exists   = await User.findOne({ userId: 'admin' });
-
     if (!exists) {
-      // First run — create admin with password from .env or default
       const password = adminPwd || 'Admin@123!';
       const hashed   = await bcrypt.hash(password, 10);
       await User.create({
@@ -85,7 +79,6 @@ async function seedAdmin() {
       });
       console.log(`\u2705  Admin created  |  admin / ${password}`);
     } else if (adminPwd) {
-      // If ADMIN_PASSWORD is set in .env, sync it to DB on every startup
       const match = await bcrypt.compare(adminPwd, exists.password);
       if (!match) {
         exists.password = await bcrypt.hash(adminPwd, 10);
@@ -129,23 +122,23 @@ async function isPasswordReused(password, history = []) {
 const genOTP = () => String(Math.floor(100000 + Math.random() * 900000));
 
 async function sendEmailOTP(to, otp, purpose) {
-  if (!GMAIL_USER || !GMAIL_PASS) {
-    console.log(`\n📧  [DEV] Email OTP for ${to} → ${otp}\n`); return;
+  // DEV mode — no API key
+  if (!BREVO_KEY) {
+    console.log(`\n📧  [DEV] Email OTP for ${to} → ${otp}\n`);
+    return;
   }
-  const t = nodemailer.createTransport({
-    host: 'smtp.gmail.com',
-    port: 587,
-    secure: true,
-    family: 4,             // ← FIXED: force IPv4, prevents ENETUNREACH on Render
-    auth: { user: GMAIL_USER, pass: GMAIL_PASS },
-    connectionTimeout: 10000,  // 10s max to connect
-    greetingTimeout:   8000,   // 8s max for server greeting
-  });
-  await t.sendMail({
-    from: `"CodeMentor AI" <${GMAIL_USER}>`, to,
-    subject: purpose === 'register' ? 'CodeMentor AI — Verify Account' : 'CodeMentor AI — Reset Password',
-    html: `<div style="font-family:monospace;background:#0d0d0d;color:#f0ece4;padding:32px;max-width:420px;border-radius:10px">
-      <p style="font-size:20px;font-weight:800;margin-bottom:4px">⚡ Code<span style="color:#f59e0b">Mentor</span> AI</p>
+
+  const body = JSON.stringify({
+    sender: {
+      name: SENDER_NAME,
+      email: SENDER_EMAIL
+    },
+    to: [{ email: to }],
+    subject: purpose === 'register'
+      ? 'CodeMentor AI — Verify Account'
+      : 'CodeMentor AI — Reset Password',
+    htmlContent: `<div style="font-family:monospace;background:#0d0d0d;color:#f0ece4;padding:32px;max-width:420px;border-radius:10px">
+      <p style="font-size:20px;font-weight:800;margin-bottom:4px">&#x26A1; Code<span style="color:#f59e0b">Mentor</span> AI</p>
       <p style="color:#6b7280;font-size:11px;margin-bottom:24px">INTELLIGENT CODING COMPANION</p>
       <p style="font-size:13px;margin-bottom:16px">${purpose === 'register' ? 'Your verification OTP' : 'Your password reset OTP'}:</p>
       <div style="background:#1a1a1a;border:1px solid #f59e0b44;border-radius:8px;padding:18px;text-align:center;margin-bottom:16px">
@@ -153,6 +146,29 @@ async function sendEmailOTP(to, otp, purpose) {
       </div>
       <p style="color:#555;font-size:11px">Valid for 10 minutes. Do not share this OTP.</p>
     </div>`
+  });
+
+  await new Promise((resolve, reject) => {
+    const req = https.request({
+      hostname: 'api.brevo.com',
+      path: '/v3/smtp/email',
+      method: 'POST',
+      headers: {
+        'api-key': BREVO_KEY,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(body)
+      }
+    }, res => {
+      let d = '';
+      res.on('data', c => d += c);
+      res.on('end', () => {
+        if (res.statusCode >= 200 && res.statusCode < 300) resolve(d);
+        else reject(new Error(`Brevo error ${res.statusCode}: ${d}`));
+      });
+    });
+    req.on('error', reject);
+    req.write(body);
+    req.end();
   });
 }
 
@@ -175,8 +191,8 @@ function storeOTP(key, otp, extra = {}) {
 
 function checkOTP(key, otp) {
   const r = otpStore.get(key);
-  if (!r)                          return 'No OTP found. Please request again.';
-  if (Date.now() > r.expires)     { otpStore.delete(key); return 'OTP expired. Please request a new one.'; }
+  if (!r)                           return 'No OTP found. Please request again.';
+  if (Date.now() > r.expires)      { otpStore.delete(key); return 'OTP expired. Please request a new one.'; }
   if (r.otp !== String(otp).trim()) return 'Incorrect OTP. Please try again.';
   const data = { ...r }; otpStore.delete(key); return { ok: true, data };
 }
@@ -188,11 +204,10 @@ app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.json({ limit: '4mb' }));
 app.use(express.urlencoded({ extended: true }));
 
-// Prevent direct browser access to source code via URL
 app.use((req, res, next) => {
   const ext = path.extname(req.path).toLowerCase();
   if ((ext === '.js' || ext === '.css') && req.headers['sec-fetch-dest'] === 'document') {
-    return res.status(403).send('<html><head><title>Forbidden</title></head><body style="background:#0d0d0d;color:#ef4444;font-family:monospace;padding:40px;text-align:center;"><h2>⚠️ 403 Forbidden</h2><p>Direct access to source files is not allowed.</p></body></html>');
+    return res.status(403).send('<html><head><title>Forbidden</title></head><body style="background:#0d0d0d;color:#ef4444;font-family:monospace;padding:40px;text-align:center;"><h2>&#x26A0;&#xFE0F; 403 Forbidden</h2><p>Direct access to source files is not allowed.</p></body></html>');
   }
   next();
 });
@@ -210,7 +225,6 @@ const authLimiter = rateLimit({
   standardHeaders: true, legacyHeaders: false
 });
 
-// Tighter limiter specifically for security-answer verification (prevent brute-force)
 const forgotLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, max: 5,
   message: { error: 'Too many reset attempts. Please wait 15 minutes before trying again.' },
@@ -240,11 +254,9 @@ app.post('/api/auth/register/send-otp', authLimiter, async (req, res) => {
 
   const key = userId.toLowerCase();
 
-  // Check unique userId
   const existing = await User.findOne({ userId: key });
   if (existing) return res.status(400).json({ error: 'This User ID is already taken. Please choose another.' });
 
-  // Check unique contact
   const dupContact = await User.findOne(method === 'email' ? { email: contact } : { phone: contact });
   if (dupContact) return res.status(400).json({ error: `This ${method} is already registered.` });
 
@@ -252,18 +264,12 @@ app.post('/api/auth/register/send-otp', authLimiter, async (req, res) => {
   const otpKey = `reg_${key}`;
   storeOTP(otpKey, otp, { pending: { userId: key, name: name.trim(), password, method, contact, securityAnswer } });
 
-  // Respond instantly — send OTP in background so UI doesn't hang
   res.json({ success: true, message: `OTP sent to your ${method}.` });
 
-  // Fire and forget — errors logged to terminal
   if (method === 'email') {
-    sendEmailOTP(contact, otp, 'register').catch(e => {
-      console.error('Email OTP error:', e.message);
-    });
+    sendEmailOTP(contact, otp, 'register').catch(e => console.error('Email OTP error:', e.message));
   } else {
-    sendPhoneOTP(contact, otp).catch(e => {
-      console.error('Phone OTP error:', e.message);
-    });
+    sendPhoneOTP(contact, otp).catch(e => console.error('Phone OTP error:', e.message));
   }
 });
 
@@ -280,11 +286,10 @@ app.post('/api/auth/register/verify-otp', authLimiter, async (req, res) => {
   const { pending } = result.data;
   if (!pending) return res.status(400).json({ error: 'Session expired. Please start again.' });
 
-  // Double-check userId uniqueness at write time
   const existing = await User.findOne({ userId: key });
   if (existing) return res.status(400).json({ error: 'This User ID was just taken. Please choose another.' });
 
-  const hashed = await bcrypt.hash(pending.password, 10);
+  const hashed  = await bcrypt.hash(pending.password, 10);
   const secHash = await bcrypt.hash((pending.securityAnswer || '').toLowerCase().trim(), 10);
 
   const user = await User.create({
@@ -321,14 +326,12 @@ app.post('/api/auth/logout', (req, res) => req.session.destroy(() => res.json({ 
 app.get('/api/auth/me', auth, (req, res) => res.json({ user: req.session.user }));
 
 /* ───────────────────────────────────────
-   FORGOT PASSWORD — Step 1: Send OTP to registered email
-   ⛔ ADMIN is BLOCKED — use ADMIN_PASSWORD in .env
+   FORGOT PASSWORD
 ─────────────────────────────────────── */
 app.post('/api/auth/forgot/send-otp', forgotLimiter, async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: 'User ID is required.' });
 
-  // Admin blocked
   if (userId.toLowerCase().trim() === 'admin')
     return res.status(403).json({ error: 'Admin password cannot be reset here. Update ADMIN_PASSWORD in .env.' });
 
@@ -338,7 +341,6 @@ app.post('/api/auth/forgot/send-otp', forgotLimiter, async (req, res) => {
   const otp = genOTP();
   otpStore.set(`fpw_${userId.toLowerCase()}`, { otp, expires: Date.now() + 10 * 60 * 1000 });
 
-  // Respond immediately, send email in background
   res.json({ success: true, message: `OTP sent to your registered email.` });
 
   const contact = user.email || user.phone;
@@ -349,25 +351,22 @@ app.post('/api/auth/forgot/send-otp', forgotLimiter, async (req, res) => {
   }
 });
 
-/* Forgot Password — Step 2: Verify OTP → issue reset token */
 app.post('/api/auth/forgot/verify-otp', forgotLimiter, async (req, res) => {
   const { userId, otp } = req.body;
   if (!userId || !otp) return res.status(400).json({ error: 'User ID and OTP are required.' });
 
-  const key   = `fpw_${userId.toLowerCase().trim()}`;
+  const key    = `fpw_${userId.toLowerCase().trim()}`;
   const stored = otpStore.get(key);
   if (!stored)                      return res.status(400).json({ error: 'No OTP found. Please request a new one.' });
   if (Date.now() > stored.expires) { otpStore.delete(key); return res.status(400).json({ error: 'OTP expired. Please request a new one.' }); }
-  if (stored.otp !== String(otp).trim())  return res.status(400).json({ error: 'Incorrect OTP. Please try again.' });
+  if (stored.otp !== String(otp).trim()) return res.status(400).json({ error: 'Incorrect OTP. Please try again.' });
   otpStore.delete(key);
 
-  // Issue a short-lived reset token
   const token = uuidv4();
   otpStore.set(`reset_${userId.toLowerCase()}`, { token, expires: Date.now() + 5 * 60 * 1000 });
   res.json({ success: true, token, message: 'OTP verified. You may now reset your password.' });
 });
 
-/* Forgot Password — Step 3: Reset Password */
 app.post('/api/auth/forgot/reset', forgotLimiter, async (req, res) => {
   const { userId, token, newPassword, confirmPassword } = req.body;
   if (!userId || !token || !newPassword || !confirmPassword)
@@ -378,7 +377,7 @@ app.post('/api/auth/forgot/reset', forgotLimiter, async (req, res) => {
   const pwErr = validatePassword(newPassword);
   if (pwErr) return res.status(400).json({ error: pwErr });
 
-  const key = `reset_${userId.toLowerCase()}`;
+  const key    = `reset_${userId.toLowerCase()}`;
   const stored = otpStore.get(key);
   if (!stored || stored.token !== token || Date.now() > stored.expires)
     return res.status(400).json({ error: 'Reset session expired. Please start again.' });
@@ -387,7 +386,6 @@ app.post('/api/auth/forgot/reset', forgotLimiter, async (req, res) => {
   const user = await User.findOne({ userId: userId.toLowerCase() });
   if (!user) return res.status(404).json({ error: 'No account found.' });
 
-  // Unique password: check last 5
   if (await isPasswordReused(newPassword, user.passwordHistory))
     return res.status(400).json({ error: 'You cannot reuse a recent password. Please choose a different one.' });
 
@@ -399,12 +397,11 @@ app.post('/api/auth/forgot/reset', forgotLimiter, async (req, res) => {
 });
 
 /* ───────────────────────────────────────
-   CHANGE PASSWORD (logged-in) — requires current password + security answer
+   CHANGE PASSWORD
 ─────────────────────────────────────── */
 app.post('/api/auth/change-password', auth, async (req, res) => {
   const { currentPassword, securityAnswer, newPassword, confirmPassword } = req.body;
 
-  // Admin password is controlled exclusively via ADMIN_PASSWORD in .env
   if (req.session.user?.userId === 'admin')
     return res.status(403).json({ error: 'Admin password can only be changed via ADMIN_PASSWORD in the .env file.' });
 
@@ -419,17 +416,14 @@ app.post('/api/auth/change-password', auth, async (req, res) => {
   const user = await User.findOne({ userId: req.session.user.userId });
   if (!user) return res.status(404).json({ error: 'User not found.' });
 
-  // Verify current password
   const pwMatch = await bcrypt.compare(currentPassword, user.password);
   if (!pwMatch) return res.status(400).json({ error: 'Current password is incorrect.' });
 
-  // Verify security answer (favorite book)
   if (!user.securityAnswer)
     return res.status(400).json({ error: 'No security question set on this account.' });
   const ansMatch = await bcrypt.compare(securityAnswer.toLowerCase().trim(), user.securityAnswer);
   if (!ansMatch) return res.status(400).json({ error: 'Incorrect security answer. Please try again.' });
 
-  // Unique password check
   if (await isPasswordReused(newPassword, user.passwordHistory))
     return res.status(400).json({ error: 'You cannot reuse a recent password. Please choose a different one.' });
 
@@ -491,7 +485,6 @@ app.get('/api/admin/users', auth, admin, async (req, res) => {
   res.json({ users: enriched });
 });
 
-// Get all messages for a specific user (admin view/download)
 app.get('/api/admin/users/:uid/messages', auth, admin, async (req, res) => {
   const user = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!user) return res.status(404).json({ error: 'User not found.' });
@@ -506,7 +499,6 @@ app.get('/api/admin/users/:uid/messages', auth, admin, async (req, res) => {
   res.json({ user: { userId: user.userId, name: user.name, email: user.email }, chats: data });
 });
 
-// Download messages as JSON file
 app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req, res) => {
   const user = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!user) return res.status(404).json({ error: 'User not found.' });
@@ -547,7 +539,7 @@ app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   res.json({ success: true });
 });
 
-let activeModel = null; // Remember the fastest working model in memory
+let activeModel = null;
 
 app.post('/api/chat', auth, async (req, res) => {
   if (!GEMINI_KEY) return res.status(500).json({ error: 'GEMINI_API_KEY not set in .env' });
@@ -557,32 +549,23 @@ app.post('/api/chat', auth, async (req, res) => {
   const contents = messages.map(m => {
     const parts = [];
     if (m.file && m.file.data && m.file.mimeType) {
-      parts.push({
-        inlineData: { mimeType: m.file.mimeType, data: m.file.data }
-      });
+      parts.push({ inlineData: { mimeType: m.file.mimeType, data: m.file.data } });
     }
     parts.push({ text: m.content });
-    
-    return {
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts
-    };
+    return { role: m.role === 'assistant' ? 'model' : 'user', parts };
   });
-  
+
   const payload = JSON.stringify({
     system_instruction: { parts: [{ text: system || '' }] },
     contents,
     generationConfig: { maxOutputTokens: 8192, temperature: 0.7 }
   });
 
-  // Detect if this request includes an image — image requests need 90s timeout
-  const hasImage = messages.some(m => m.file && m.file.data);
-
-  // Primary model + fallback for reliability
+  const hasImage    = messages.some(m => m.file && m.file.data);
   const modelsToTry = ['gemini-2.5-flash', 'gemini-1.5-flash'];
 
   const callGemini = (model) => new Promise((resolve, reject) => {
-    const requestTimeout = hasImage ? 90000 : 30000; // 90s for images, 30s for text
+    const requestTimeout = hasImage ? 90000 : 30000;
     const opts = {
       hostname: 'generativelanguage.googleapis.com',
       path: `/v1beta/models/${model}:generateContent?key=${GEMINI_KEY}`,
@@ -590,13 +573,11 @@ app.post('/api/chat', auth, async (req, res) => {
       headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
       timeout: requestTimeout
     };
-
     const apiReq = https.request(opts, apiRes => {
       let data = '';
       apiRes.on('data', c => data += c);
       apiRes.on('end', () => resolve({ status: apiRes.statusCode, data }));
     });
-    
     apiReq.on('timeout', () => { apiReq.destroy(); reject(new Error('Timeout')); });
     apiReq.on('error', e => reject(e));
     apiReq.write(payload);
@@ -608,11 +589,10 @@ app.post('/api/chat', auth, async (req, res) => {
   for (const model of modelsToTry) {
     try {
       const response = await callGemini(model);
-      
       if (response.status === 200) {
         const p = JSON.parse(response.data);
         if (p.candidates?.[0]?.content?.parts?.[0]?.text) {
-          activeModel = model; // Cache this working model for next time!
+          activeModel = model;
           return res.json({ content: [{ type: 'text', text: p.candidates[0].content.parts[0].text }] });
         }
       } else {
@@ -630,7 +610,6 @@ app.post('/api/chat', auth, async (req, res) => {
     }
   }
 
-  // If all models failed sequentially
   res.status(500).json({ error: lastError });
 });
 
@@ -643,6 +622,6 @@ mongoose.connection.once('open', async () => {
   await seedAdmin();
   app.listen(PORT, () => {
     console.log(`\n⚡  CodeMentor AI → http://localhost:${PORT}`);
-    if (!GMAIL_USER)   console.log(`    📧  Email OTP → IT WILL BE SENT TO EMAIL`);
+    if (!BREVO_KEY) console.log(`    📧  Email OTP → [DEV mode, add BREVO_API_KEY to env]`);
   });
 });
