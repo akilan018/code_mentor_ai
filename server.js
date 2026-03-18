@@ -122,17 +122,13 @@ async function isPasswordReused(password, history = []) {
 const genOTP = () => String(Math.floor(100000 + Math.random() * 900000));
 
 async function sendEmailOTP(to, otp, purpose) {
-  // DEV mode — no API key
   if (!BREVO_KEY) {
     console.log(`\n📧  [DEV] Email OTP for ${to} → ${otp}\n`);
     return;
   }
 
   const body = JSON.stringify({
-    sender: {
-      name: SENDER_NAME,
-      email: SENDER_EMAIL
-    },
+    sender: { name: SENDER_NAME, email: SENDER_EMAIL },
     to: [{ email: to }],
     subject: purpose === 'register'
       ? 'CodeMentor AI — Verify Account'
@@ -231,8 +227,9 @@ const forgotLimiter = rateLimit({
   standardHeaders: true, legacyHeaders: false
 });
 
-const auth  = (q, s, n) => q.session.user ? n() : s.status(401).json({ error: 'Not authenticated' });
-const admin = (q, s, n) => q.session.user?.role === 'admin' ? n() : s.status(403).json({ error: 'Forbidden' });
+const auth      = (q, s, n) => q.session.user ? n() : s.status(401).json({ error: 'Not authenticated' });
+const admin     = (q, s, n) => q.session.user?.role === 'admin' ? n() : s.status(403).json({ error: 'Forbidden' });
+const isMain    = (sessionUser) => sessionUser?.userId === 'admin'; // main admin check
 
 /* ───────────────────────────────────────
    REGISTER
@@ -520,20 +517,61 @@ app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req, res)
   res.send(JSON.stringify(data, null, 2));
 });
 
+/* ───────────────────────────────────────
+   ROLE CHANGE RULES:
+   - Nobody can change their own role
+   - Nobody can change main admin's role
+   - Sub-admins CANNOT promote/demote other admins
+   - Only main admin CAN demote sub-admins
+─────────────────────────────────────── */
 app.put('/api/admin/users/:uid/role', auth, admin, async (req, res) => {
   const { role } = req.body;
-  if (!['admin', 'user'].includes(role)) return res.status(400).json({ error: 'Invalid role.' });
+  if (!['admin', 'user'].includes(role))
+    return res.status(400).json({ error: 'Invalid role.' });
+
   const u = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-  if (u.userId === req.session.user.userId) return res.status(400).json({ error: 'Cannot change your own role.' });
-  u.role = role; await u.save();
+
+  // Cannot change your own role
+  if (u.userId === req.session.user.userId)
+    return res.status(400).json({ error: 'Cannot change your own role.' });
+
+  // Nobody can touch main admin
+  if (u.userId === 'admin')
+    return res.status(403).json({ error: 'Main admin role cannot be changed by anyone.' });
+
+  // Sub-admins cannot touch other admins — only main admin can
+  if (u.role === 'admin' && !isMain(req.session.user))
+    return res.status(403).json({ error: 'Only the main admin can demote other admins.' });
+
+  u.role = role;
+  await u.save();
   res.json({ success: true });
 });
 
+/* ───────────────────────────────────────
+   DELETE RULES:
+   - Nobody can delete themselves
+   - Nobody can delete main admin (ever)
+   - Sub-admins CANNOT delete other admins
+   - Only main admin CAN delete sub-admins
+─────────────────────────────────────── */
 app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   const u = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-  if (u.userId === req.session.user.userId) return res.status(400).json({ error: 'Cannot delete yourself.' });
+
+  // Cannot delete yourself
+  if (u.userId === req.session.user.userId)
+    return res.status(400).json({ error: 'Cannot delete yourself.' });
+
+  // Main admin can never be deleted
+  if (u.userId === 'admin')
+    return res.status(403).json({ error: 'Main admin cannot be deleted.' });
+
+  // Sub-admins cannot delete other admins — only main admin can
+  if (u.role === 'admin' && !isMain(req.session.user))
+    return res.status(403).json({ error: 'Only the main admin can delete other admins.' });
+
   await Chat.deleteMany({ ownerId: u.id });
   await User.deleteOne({ userId: u.userId });
   res.json({ success: true });
