@@ -134,7 +134,7 @@ async function sendEmailOTP(to, otp, purpose) {
   }
   const t = nodemailer.createTransport({
     host: 'smtp.gmail.com',
-    port: 465,
+    port: 587,
     secure: true,
     family: 4,             // ← FIXED: force IPv4, prevents ENETUNREACH on Render
     auth: { user: GMAIL_USER, pass: GMAIL_PASS },
