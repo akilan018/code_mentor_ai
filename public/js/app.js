@@ -650,9 +650,7 @@ async function switchChat(id) {
   else {
     const rebuilt = []; history.forEach(m => {
       if (m.role === 'user') {
-        const txt = (m.content || '').replace(/\[MODE:[A-Z]+\]\[LANG:[^\]]+\]
-
-/, '');
+        const txt = (m.content || '').replace(/\[MODE:[A-Z]+\]\[LANG:[^\]]+\]\n\n/, '');
         rebuilt.push({ role: 'user', content: txt, isHTML: false });
         renderMessage('user', txt, false);
       } else if (m.role === 'assistant') {
