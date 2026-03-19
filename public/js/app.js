@@ -206,7 +206,6 @@ async function doLogout() {
    REGISTER (2 steps: info → OTP)
 ══════════════════════════════════════ */
 
-
 function checkUid(val) {
   const hint = document.getElementById('uidHint');
   if (!val) { hint.textContent = ''; return; }
@@ -324,13 +323,11 @@ async function verifyRegOtp() {
 
 /* ══════════════════════════════════════
 
-
    FORGOT PASSWORD — 3-step OTP flow
    Step 1: Enter userId → OTP emailed
    Step 2: Enter OTP → get reset token
    Step 3: Set new password
 ══════════════════════════════════════ */
-
 
 async function doForgotSendOtp() {
   const userId = document.getElementById('forgotUserId').value.trim();
@@ -370,7 +367,6 @@ async function doForgotVerifyOtp() {
   }, 600);
 }
 
-
 async function doForgotReset() {
   const newPass = document.getElementById('forgotNew').value;
   const confirm = document.getElementById('forgotConfirm').value;
@@ -395,10 +391,8 @@ async function doForgotReset() {
 
 /* ══════════════════════════════════════
 
-
    CHANGE PASSWORD
 ══════════════════════════════════════ */
-
 
 function openPasswordModal() {
   ['pwCurrent','pwSecAnswer','pwNew','pwConfirm'].forEach(id => {
@@ -446,10 +440,8 @@ async function doChangePassword() {
 
 /* ══════════════════════════════════════
 
-
    SIDEBAR
 ══════════════════════════════════════ */
-
 
 function toggleSidebar() {
   const sb   = document.getElementById('sidebar');
@@ -544,10 +536,8 @@ function closePasswordModal() { closeSettingsModal(); }
 
 /* ══════════════════════════════════════
 
-
    CHAT LIST
 ══════════════════════════════════════ */
-
 
 async function loadChatList() {
   const res   = await api('GET', '/api/chats');
@@ -630,10 +620,9 @@ async function newChat() {
 
 async function switchChat(id) {
   activeId = id;
-  if (!cache[id]) {
-    const res = await api('GET', `/api/chats/${id}`);
-    cache[id] = res.chat || { history: [], rendered: [] };
-  }
+  const res = await api('GET', `/api/chats/${id}`); // Always fetch fresh — never rely on stale cache after login
+  const chatData = res.chat || res; // handle both { chat:{} } and direct object responses
+  cache[id] = { history: chatData.history || [], rendered: chatData.rendered || [] };
   const listRes = await api('GET', '/api/chats');
   const meta    = (listRes.chats || []).find(c => c.id === id);
   document.getElementById('chatTitleDisplay').textContent = meta?.title || 'Chat';
@@ -662,10 +651,8 @@ function goHome() {
 
 /* ══════════════════════════════════════
 
-
    WELCOME SCREEN
 ══════════════════════════════════════ */
-
 
 function showWelcome() {
   document.getElementById('messages').innerHTML = `
@@ -691,10 +678,8 @@ function showWelcome() {
 
 /* ══════════════════════════════════════
 
-
    MODE & LANG
 ══════════════════════════════════════ */
-
 
 function setMode(m, el) {
   mode = m;
@@ -739,7 +724,7 @@ Unless the user uploaded ANY file (like an image, PDF, document, or code script)
 <div class="sol-easy">
 <p>[How the Easy version works]</p>
 [CODE with green comments on EVERY single line, never smashed]
-<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-text"><strong>Input:</strong> [the exact input values used] &nbsp;|&nbsp; <strong>Output:</strong> [the exact result] &nbsp;|&nbsp; <strong>Reason:</strong> [one line why this is correct]</p></div></div>
+<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [the exact input values used in this code]</p><p class="out-line"><strong>Result &nbsp;:</strong> [the exact output value printed or returned]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [one short sentence — why is this the correct answer]</p></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
 <ul>
 <li><strong>🔷 KEYWORD</strong> <code>def</code> — Explanation...</li>
@@ -750,7 +735,7 @@ Unless the user uploaded ANY file (like an image, PDF, document, or code script)
 <div class="sol-opt" style="display:none">
 <p>[Why this Optimized version is better]</p>
 [OPTIMIZED CODE with green comments]
-<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-text"><strong>Input:</strong> [the exact input values used] &nbsp;|&nbsp; <strong>Output:</strong> [the exact result] &nbsp;|&nbsp; <strong>Reason:</strong> [one line why this is correct]</p></div></div>
+<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [the exact input values used in this code]</p><p class="out-line"><strong>Result &nbsp;:</strong> [the exact output value printed or returned]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [one short sentence — why is this the correct answer]</p></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
 <ul><li>... (full list for ALL lines here) ...</li></ul>
 </div>
@@ -763,29 +748,44 @@ RULE 2 — CODE FORMAT & COMMENTS
 CRITICAL: Every line of code MUST have a comment.
 - Green comment on one line, actual code on the VERY NEXT line.
 - NEVER put multiple code statements on a single line.
-- Use correct syntax (// for Java/JS/C++, # for Python).
+- Use correct syntax (// for Java/C/JS/C++, # for Python).
 
-FULL PROGRAM WRAPPERS — ALWAYS wrap code in the complete runnable structure:
+LAYOUT CRITICAL — NO PARALLEL / SIDE-BY-SIDE CODE EVER:
+- NEVER place two code blocks next to each other horizontally.
+- NEVER use columns, grids, flex-row, or tables to show code side by side.
+- ALL code blocks must stack VERTICALLY, one after another, full width.
+- Easy version first → then Optimized version below it (hidden by tab).
 
-JAVA: Always wrap ALL code inside a full class. NEVER show a bare method alone.
+FULL PROGRAM WRAPPERS — ALWAYS wrap in complete runnable program:
+
+JAVA — ALWAYS use full class. NEVER show a bare method alone.
+  Use data-lang="java" on the code block.
   public class Main {
     public static void main(String[] args) {
       // call the method and print result here
     }
     public static [returnType] methodName(...) {
-      // method body
+      // method body here
     }
   }
 
-C: Always include headers and int main(). NEVER show bare functions alone.
+C — ALWAYS include #include headers and int main(). NEVER show a bare function.
+  Use data-lang="c" on the code block.
+  CRITICAL: The data-lang attribute MUST be exactly "c" (lowercase).
   #include <stdio.h>
-  int methodName(...) { ... }
+  #include <stdlib.h>
+  // function definition above main
+  int methodName(int arr[], int n, int target) {
+    // function body
+  }
   int main() {
-    // call the function and print result here
+    // declare variables and call the function here
+    printf("Result: ...");
     return 0;
   }
 
-PYTHON: Always wrap runnable code inside if __name__ == "__main__":
+PYTHON — ALWAYS wrap with if __name__ == "__main__":
+  Use data-lang="python" on the code block.
   def method_name(...):
     # function body
   if __name__ == "__main__":
