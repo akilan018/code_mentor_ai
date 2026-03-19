@@ -9,7 +9,6 @@ const https       = require('https');
 const mongoose    = require('mongoose');
 const helmet      = require('helmet');
 const rateLimit   = require('express-rate-limit');
-const Brevo       = require('@getbrevo/brevo');
 
 const app  = express();
 app.set('trust proxy', 1);
@@ -21,6 +20,13 @@ const GEMINI_KEYS = [
   process.env.GEMINI_API_KEY   || '',
   process.env.GEMINI_API_KEY_2 || '',
   process.env.GEMINI_API_KEY_3 || '',
+].filter(Boolean);
+
+/* ── NVIDIA fallback keys (3 keys) ── */
+const NVIDIA_KEYS = [
+  process.env.NVIDIA_API_KEY_1 || '',
+  process.env.NVIDIA_API_KEY_2 || '',
+  process.env.NVIDIA_API_KEY_3 || '',
 ].filter(Boolean);
 
 const BREVO_API_KEY   = process.env.BREVO_API_KEY   || '';
@@ -135,7 +141,6 @@ function isGlobalAdmin(userId) {
    BREVO EMAIL
 ─────────────────────────────────────── */
 async function sendEmailOTP(to, otp, purpose) {
-  // Log OTP to console always (for dev/debugging)
   console.log(`\n📧  Email OTP for ${to} → ${otp}\n`);
 
   if (!BREVO_API_KEY || !BREVO_FROM_EMAIL) {
@@ -610,7 +615,7 @@ app.put('/api/admin/users/:uid/role', auth, admin, async (req, res) => {
   res.json({ success: true });
 });
 
-/* Delete — global admin is protected, and admins can delete other admins (except global) */
+/* Delete — global admin is protected */
 app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   const targetUid = req.params.uid.toLowerCase();
 
@@ -629,12 +634,13 @@ app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
 });
 
 /* ───────────────────────────────────────
-   CHAT — Gemini key hierarchy (3 keys)
+   CHAT — Gemini first, NVIDIA fallback
 ─────────────────────────────────────── */
-let preferredKeyIndex = 0; // Index into GEMINI_KEYS that worked last
+let preferredKeyIndex = 0;
 
 app.post('/api/chat', auth, async (req, res) => {
-  if (!GEMINI_KEYS.length) return res.status(500).json({ error: 'No GEMINI_API_KEY set in environment.' });
+  if (!GEMINI_KEYS.length && !NVIDIA_KEYS.length)
+    return res.status(500).json({ error: 'No API keys set in environment.' });
 
   const { system, messages } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
@@ -655,13 +661,11 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   const hasImage = messages.some(m => m.file && m.file.data);
-  // Estimate complexity: short query = fast timeout; long/image = longer timeout
   const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
   const queryLen    = (lastUserMsg?.content || '').length;
   const isSimple    = !hasImage && queryLen < 300;
   const requestTimeout = hasImage ? 120000 : (isSimple ? 25000 : 70000);
 
-  // Use only models explicitly provisioned on this exclusive API key
   const modelsToTry = [
     'gemini-2.0-flash',
     'gemini-2.0-flash-lite',
@@ -671,6 +675,7 @@ app.post('/api/chat', auth, async (req, res) => {
     'gemini-3-flash-preview'
   ];
 
+  /* ── Gemini call ── */
   const callGemini = (model, apiKey) => new Promise((resolve, reject) => {
     const opts = {
       hostname: 'generativelanguage.googleapis.com',
@@ -689,35 +694,98 @@ app.post('/api/chat', auth, async (req, res) => {
     apiReq.write(payload); apiReq.end();
   });
 
+  /* ── NVIDIA call (text-only fallback) ── */
+  const callNvidia = (apiKey) => new Promise((resolve, reject) => {
+    const nvidiaMessages = [
+      { role: 'system', content: system || '' },
+      ...messages.map(m => ({
+        role: m.role === 'assistant' ? 'assistant' : 'user',
+        content: m.file
+          ? `[User attached a file: ${m.file.name || 'file'}. Describe and explain it as best you can.]\n\n${m.content}`
+          : m.content
+      }))
+    ];
+    const nvidiaPayload = JSON.stringify({
+      model: 'meta/llama-3.1-70b-instruct',
+      messages: nvidiaMessages,
+      max_tokens: 4096,
+      temperature: 0.7,
+      stream: false
+    });
+    const opts = {
+      hostname: 'integrate.api.nvidia.com',
+      path: '/v1/chat/completions',
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Content-Length': Buffer.byteLength(nvidiaPayload)
+      },
+      timeout: requestTimeout
+    };
+    const apiReq = https.request(opts, apiRes => {
+      let data = '';
+      apiRes.on('data', c => data += c);
+      apiRes.on('end', () => resolve({ status: apiRes.statusCode, data }));
+    });
+    apiReq.on('timeout', () => { apiReq.destroy(); reject(new Error('NVIDIA Timeout')); });
+    apiReq.on('error', e => reject(e));
+    apiReq.write(nvidiaPayload); apiReq.end();
+  });
+
   let lastError = 'No response from AI models.';
 
-  // The other method: Prefer best models across all keys first!
-  const keyOrder = GEMINI_KEYS.map((_, i) => (preferredKeyIndex + i) % GEMINI_KEYS.length);
+  /* ── Step 1: Try all Gemini keys × models ── */
+  if (GEMINI_KEYS.length) {
+    const keyOrder = GEMINI_KEYS.map((_, i) => (preferredKeyIndex + i) % GEMINI_KEYS.length);
+    for (const model of modelsToTry) {
+      for (const keyIdx of keyOrder) {
+        const apiKey = GEMINI_KEYS[keyIdx];
+        try {
+          const response = await callGemini(model, apiKey);
+          if (response.status === 200) {
+            const p = JSON.parse(response.data);
+            if (p.candidates?.[0]?.content?.parts?.[0]?.text) {
+              preferredKeyIndex = keyIdx;
+              return res.json({ content: [{ type: 'text', text: p.candidates[0].content.parts[0].text }] });
+            }
+          } else if (response.status === 429 || response.status === 403) {
+            try { lastError = JSON.parse(response.data).error?.message || `Key ${keyIdx+1} quota exceeded`; } catch {}
+            console.warn(`[Gemini Key ${keyIdx+1}] ${model} quota/rate-limited → trying next...`);
+          } else {
+            try { lastError = JSON.parse(response.data).error?.message || `${model} status ${response.status}`; } catch {}
+            console.warn(`[Gemini Key ${keyIdx+1}] ${model} failed: ${lastError}`);
+          }
+        } catch (err) {
+          lastError = err.message || 'Network error';
+          console.warn(`[Gemini Key ${keyIdx+1}] ${model} error: ${lastError}`);
+        }
+      }
+    }
+  }
 
-  for (const model of modelsToTry) {
-    for (const keyIdx of keyOrder) {
-      const apiKey = GEMINI_KEYS[keyIdx];
+  /* ── Step 2: All Gemini failed → try NVIDIA ── */
+  if (NVIDIA_KEYS.length) {
+    console.warn('⚠️  All Gemini keys exhausted → switching to NVIDIA fallback...');
+    for (let i = 0; i < NVIDIA_KEYS.length; i++) {
       try {
-        const response = await callGemini(model, apiKey);
+        const response = await callNvidia(NVIDIA_KEYS[i]);
         if (response.status === 200) {
           const p = JSON.parse(response.data);
-          if (p.candidates?.[0]?.content?.parts?.[0]?.text) {
-            preferredKeyIndex = keyIdx; // Cache winning key
-            return res.json({ content: [{ type: 'text', text: p.candidates[0].content.parts[0].text }] });
+          const text = p.choices?.[0]?.message?.content;
+          if (text) {
+            console.log('✅  NVIDIA fallback succeeded');
+            return res.json({ content: [{ type: 'text', text }] });
           }
-        } else if (response.status === 429 || response.status === 403) {
-          // Rate-limited out of quota on this specific key for this model
-          try { lastError = JSON.parse(response.data).error?.message || `Key ${keyIdx+1} quota exceeded`; } catch {}
-          console.warn(`[Key ${keyIdx+1}] ${model} quota/rate-limited. Trying next key...`);
-          // Try next key in the keyOrder inner loop for this model
+        } else if (response.status === 429) {
+          console.warn(`[NVIDIA Key ${i+1}] Rate limited → trying next NVIDIA key...`);
         } else {
-          try { lastError = JSON.parse(response.data).error?.message || `${model} status ${response.status}`; } catch {}
-          console.warn(`[Key ${keyIdx+1}] ${model} failed: ${lastError}`);
-          // 404 Not Found or other error means this model is likely fully offline or unsupported for this key
+          try { lastError = JSON.parse(response.data).detail || `NVIDIA status ${response.status}`; } catch {}
+          console.warn(`[NVIDIA Key ${i+1}] Failed: ${lastError}`);
         }
       } catch (err) {
-        lastError = err.message || 'Network error';
-        console.warn(`[Key ${keyIdx+1}] ${model} error: ${lastError}`);
+        lastError = err.message || 'NVIDIA network error';
+        console.warn(`[NVIDIA Key ${i+1}] Error: ${lastError}`);
       }
     }
   }
@@ -734,7 +802,7 @@ mongoose.connection.once('open', async () => {
   await seedAdmin();
   app.listen(PORT, () => {
     console.log(`\n⚡  CodeMentor AI → http://localhost:${PORT}`);
-    console.log(`    🔑  Gemini keys loaded: ${GEMINI_KEYS.length}`);
+    console.log(`    🔑  Gemini keys: ${GEMINI_KEYS.length} | NVIDIA keys: ${NVIDIA_KEYS.length}`);
     if (!BREVO_API_KEY) console.log(`    📧  Brevo not configured — OTP will be logged to console`);
   });
 });
