@@ -8,11 +8,13 @@
    - Desktop hamburger sidebar
 ══════════════════════════════════════════════════ */
 
+
 /* ── STATE ── */
 let CU = null, mode = 'code', lang = 'Auto', busy = false, activeId = null, cache = {};
 let regUserId = '', forgotResetToken = '', forgotResetUserId = '';
 let currentFile = null;
 let sidebarOpen = true; // desktop: sidebar visible by default
+
 
 /* ── ATTACH MENU ── */
 function triggerFileInput(type) {
@@ -65,6 +67,7 @@ function handleFileUpload(e, fileType) {
   reader.readAsDataURL(file);
 }
 
+
 function clearFile() {
   currentFile = null;
   ['fileInputImage','fileInputDoc','fileInputProject'].forEach(id => {
@@ -73,6 +76,8 @@ function clearFile() {
   const fp = document.getElementById('filePreview');
   if (fp) fp.style.display = 'none';
 }
+
+
 
 /* ── THEME ── */
 const savedTh = localStorage.getItem('cm_theme') || 'dark';
@@ -84,10 +89,13 @@ function toggleTheme() {
   localStorage.setItem('cm_theme', n);
   updateThemeBtn(n);
 }
+
 function updateThemeBtn(t) {
   const b = document.getElementById('themeBtn');
   if (b) b.textContent = t === 'dark' ? '🌙' : '☀️';
 }
+
+
 
 /* ── API HELPER ── */
 async function api(method, url, body) {
@@ -98,12 +106,15 @@ async function api(method, url, body) {
   });
   return r.json();
 }
+
 const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
 
 /* ── INIT ── */
 (async () => {
   const res = await api('GET', '/api/auth/me'); // just check session — no forced logout
   if (res.user) loginOk(res.user);
+
   else document.getElementById('authModal').classList.add('open');
 })();
 
@@ -128,12 +139,14 @@ function switchAuthTab(tab) {
   }
   clearAuthErrors();
 }
+
 function clearAuthErrors() {
   ['loginErr','regErr','forgotErr','forgotOk','forgotOtpErr','forgotOtpOk','forgotResetErr','forgotResetOk','pwErr','pwOk'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.textContent = '';
   });
 }
+
 
 /* ══════════════════════════════════════
 
@@ -150,6 +163,7 @@ async function doLogin() {
   if (res.error) { err.textContent = res.error; return; }
   loginOk(res.user);
 }
+
 
 function loginOk(user) {
   CU = user;
@@ -168,6 +182,7 @@ function loginOk(user) {
   document.getElementById('topAdminBtn').style.display = adm ? '' : 'none';
   loadChatList();
 }
+
 
 async function doLogout() {
   await api('POST', '/api/auth/logout');
@@ -197,6 +212,7 @@ async function doLogout() {
   switchAuthTab('login');
   closeSidebar();
 }
+
 
 /* ══════════════════════════════════════
 
@@ -459,6 +475,7 @@ function closeSidebar() {
   document.getElementById('ov').classList.remove('show');
 }
 
+
 /* ══════════════════════
    SETTINGS MODAL
 ══════════════════════ */
@@ -478,6 +495,7 @@ function openSettingsModal() {
 function closeSettingsModal() {
   document.getElementById('settingsModal').classList.remove('open');
 }
+
 function switchSettingsTab(tab) {
   ['profile','userid','password'].forEach(t => {
     document.getElementById('spane-' + t).style.display = t === tab ? '' : 'none';
@@ -530,6 +548,7 @@ async function doUpdateUserId() {
 /* alias for old calls */
 function openPasswordModal()  { openSettingsModal(); switchSettingsTab('password'); }
 function closePasswordModal() { closeSettingsModal(); }
+
 
 /* ══════════════════════════════════════
 
@@ -589,6 +608,7 @@ function buildChatItem(c) {
   return el;
 }
 
+
 function startRename(id, btn) {
   const item  = btn.closest('.chat-item');
   const title = item.querySelector('.chat-item-title');
@@ -605,6 +625,7 @@ function startRename(id, btn) {
   inp.onkeydown = e => { if (e.key === 'Enter') inp.blur(); if (e.key === 'Escape') item.replaceChild(title, inp); };
 }
 
+
 async function newChat() {
   const res = await api('POST', '/api/chats', { title: 'New Chat' });
   if (!res.chat) return;
@@ -618,16 +639,29 @@ async function newChat() {
 
 async function switchChat(id) {
   activeId = id;
-  const res = await api('GET', `/api/chats/${id}`);
+  const res      = await api('GET', `/api/chats/${id}`);
   const chatData = res.chat || res;
-  cache[id] = { history: chatData.history || [], rendered: chatData.rendered || [] };
-  const listRes = await api('GET', '/api/chats');
-  const meta    = (listRes.chats || []).find(c => c.id === id);
+  const history  = chatData.history || [];
+  const listRes  = await api('GET', '/api/chats');
+  const meta     = (listRes.chats || []).find(c => c.id === id);
   document.getElementById('chatTitleDisplay').textContent = meta?.title || 'Chat';
-  const msgs = document.getElementById('messages');
-  msgs.innerHTML = '';
-  if (cache[id].rendered?.length) cache[id].rendered.forEach(r => renderMessage(r.role, r.content, r.isHTML));
-  else showWelcome();
+  document.getElementById('messages').innerHTML = '';
+  if (!history.length) { showWelcome(); cache[id] = { history: [], rendered: [] }; }
+  else {
+    const rebuilt = []; history.forEach(m => {
+      if (m.role === 'user') {
+        const txt = (m.content || '').replace(/\[MODE:[A-Z]+\]\[LANG:[^\]]+\]
+
+/, '');
+        rebuilt.push({ role: 'user', content: txt, isHTML: false });
+        renderMessage('user', txt, false);
+      } else if (m.role === 'assistant') {
+        rebuilt.push({ role: 'ai', content: m.content || '', isHTML: true });
+        renderMessage('ai', m.content || '', true);
+      }
+    });
+    cache[id] = { history, rendered: rebuilt };
+  }
   document.querySelectorAll('.chat-item').forEach(el => el.classList.toggle('active', el.dataset.id === id));
   scrollToBottom();
   closeSidebar();
@@ -688,12 +722,14 @@ function setMode(m, el) {
   const ph = { code:'Ask anything — write code, debug, explain a concept…', explain:'Paste code or describe a concept to explain…', debug:'Paste buggy code and describe the error…', roadmap:'Name a skill or technology to learn…', optimize:'Paste code to optimize…' };
   document.getElementById('msgInput').placeholder = ph[m] || ph.code;
 }
+
 function setLang(btn, l) {
   lang = l;
   document.querySelectorAll('.lang-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   document.getElementById('langTag').textContent = '◎ ' + l.toLowerCase();
 }
+
 function handleKey(e) { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); } }
 function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(el.scrollHeight, 155) + 'px'; document.getElementById('charCount').textContent = el.value.length + ' / 2000'; }
 function quickAsk(t) { document.getElementById('msgInput').value = t; autoResize(document.getElementById('msgInput')); sendMessage(); }
@@ -703,182 +739,112 @@ function quickAsk(t) { document.getElementById('msgInput').value = t; autoResize
    SYSTEM PROMPT
 ══════════════════════════════════════ */
 
-const SYSTEM = `You are CodeMentor AI — a friendly coding teacher for beginners and students.
-Respond in PURE HTML ONLY. Zero markdown. Zero asterisks. Zero hash symbols. Zero backticks.
+const SYSTEM = `You are CodeMentor AI — a friendly, patient coding teacher for beginners and students.
+RESPOND IN PURE HTML ONLY. No markdown. No asterisks. No hash symbols. No backticks ever.
 
-════════════════════════════════════════════
-
-RULE 1 — ALWAYS GIVE TWO CODE VERSIONS
-════════════════════════════════════════════
-
-Unless the user uploaded ANY file (like an image, PDF, document, or code script), structure EVERY plain code request like this:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULE 1 — MANDATORY STRUCTURE FOR EVERY CODE REQUEST
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+EVERY code request MUST follow this EXACT structure, no exceptions:
 
 <h3>🧠 Concept Explanation</h3>
-<p>[Give a clear, 2-to-3 sentence explanation with a real-world analogy.]</p>
-
+<p>[2-3 sentences explaining the concept with a real-world analogy]</p>
 <div class="solution-tabs"><button class="sol-tab easy-tab active" onclick="showSolution(this,'easy')">⬡ Easy</button><button class="sol-tab opt-tab" onclick="showSolution(this,'optimized')">⌬ Optimized</button></div>
 <div class="sol-easy">
-<p>[How the Easy version works]</p>
-[ONE complete runnable code block — comment ABOVE each code line, never on same line, never after code]
-<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [the exact input values used in this code]</p><p class="out-line"><strong>Result &nbsp;:</strong> [the exact output value printed or returned]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [one short sentence — why is this the correct answer]</p></div></div>
+<p>[How the Easy version works in 1-2 sentences]</p>
+<pre><code data-lang="[language]">
+[FULL RUNNABLE PROGRAM — see RULE 2 for format]
+</code></pre>
+<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [exact input values used]</p><p class="out-line"><strong>Result &nbsp;:</strong> [exact output printed or returned]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [one sentence why this is correct]</p></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
 <ul>
-<li><strong>🔷 KEYWORD</strong> <code>def</code> — Explanation...</li>
-<li><strong>⬜ CODE</strong> <code>x = 0</code> — Explanation...</li>
+<li><strong>🔷 KEYWORD</strong> <code>keyword</code> — what it means</li>
+<li><strong>⬜ CODE</strong> <code>line of code</code> — what it does</li>
 </ul>
-<div class="trace-block"><div class="trace-header">🔍 Real-Time Test Case Execution</div><div class="trace-body">Step-by-step trace here (5-6 steps)...</div></div>
+<div class="trace-block"><div class="trace-header">🔍 Real-Time Test Case Execution</div><div class="trace-body"><div class="trace-step"><span class="trace-n">Input</span><span class="trace-desc">We start with [values]...</span></div><div class="trace-step"><span class="trace-n">Step 1</span><span class="trace-desc">...</span></div><div class="trace-step"><span class="trace-n">Step 2</span><span class="trace-desc">...</span></div><div class="trace-step"><span class="trace-n">Result</span><span class="trace-desc">Final answer is...</span></div></div></div>
 </div>
 <div class="sol-opt" style="display:none">
-<p>[Why this Optimized version is better]</p>
-[ONE optimized runnable code block — comment ABOVE each code line, never on same line]
-<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [the exact input values used in this code]</p><p class="out-line"><strong>Result &nbsp;:</strong> [the exact output value printed or returned]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [one short sentence — why is this the correct answer]</p></div></div>
+<p>[Why this Optimized version is better — time/space complexity]</p>
+<pre><code data-lang="[language]">
+[FULL RUNNABLE OPTIMIZED PROGRAM — see RULE 2 for format]
+</code></pre>
+<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [exact input values used]</p><p class="out-line"><strong>Result &nbsp;:</strong> [exact output printed or returned]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [one sentence why this is correct]</p></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
-<ul><li>... (full list for ALL lines here) ...</li></ul>
+<ul><li>[bullet for EVERY single line of code]</li></ul>
 </div>
+<div class="tipb">[encouraging tip for the student]</div>
 
-════════════════════════════════════════════
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULE 2 — CODE FORMAT (FOLLOW EXACTLY, NO EXCEPTIONS)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+COMMENT FORMAT — The single most important rule:
+✗ WRONG: int x = 5; // set x to 5    ← comment AFTER code on same line
+✗ WRONG: // set x  int x = 5;        ← comment and code on same line
+✓ RIGHT:
+  // Set x to the starting value
+  int x = 5;
+  // Check if x is greater than zero
+  if (x > 0) {
 
-RULE 2 — CODE FORMAT & COMMENTS
-════
-════════════════════════════════════════
+Every single code line gets its own comment line placed DIRECTLY ABOVE it.
+Never on the same line. Never after the code. Always the line above.
+Use // for Java, C, C++, JavaScript. Use # for Python.
 
-CRITICAL COMMENT FORMAT — Read carefully and follow exactly:
-
-WRONG: int arr[] = {1,2,3}; // Create array  ← comment after code, WRONG
-RIGHT:
-  // Create an array with three numbers
-  int arr[] = {1, 2, 3};
-  // Loop from first to last
-  for (int i = 0; i < 3; i++) {
-Rule: comment on its OWN line ABOVE the code. Never after. Never same line.
-Use: // for Java/C/JS/C++  |  # for Python
-
-
-LAYOUT CRITICAL — NO PARALLEL / SIDE-BY-SIDE CODE EVER:
-- NEVER place two code blocks next to each other horizontally.
-- NEVER use columns, grids, flex-row, or tables to show code side by side.
-- ALL code blocks must stack VERTICALLY, one after another, full width.
-- Easy version first → then Optimized version below it (hidden by tab).
-
-FULL PROGRAM WRAPPERS — ALWAYS wrap in complete runnable program:
-JAVA — ALWAYS use full class. NEVER show a bare method alone.
-  Use data-lang="java" on the code block.
+FULL PROGRAM — Always wrap in complete runnable structure:
+JAVA → data-lang="java":
   public class Main {
-    public static void main(String[] args) {
-      // call the method and print result here
-    }
-    public static [returnType] methodName(...) {
-      // method body here
-    }
+    public static void main(String[] args) { /* call method, print result */ }
+    public static [type] methodName([params]) { /* method body */ }
   }
-C — ALWAYS include #include headers and int main(). NEVER show a bare function.
-  data-lang="c" (MUST be lowercase c). #include <stdio.h> at top.
+C → data-lang="c":
+  #include <stdio.h>
   int methodName(int arr[], int n) { /* body */ }
   int main() { /* call function, printf result, return 0; */ }
-PYTHON — ALWAYS wrap with if __name__ == "__main__":
-  Use data-lang="python" on the code block.
-  def method_name(...):
-    # function body
+PYTHON → data-lang="python":
+  def method_name(params):
+      # body
   if __name__ == "__main__":
-    # call the function and print result here
-════════════════════════════════════════════
+      # call function, print result
 
-RULE 3 — NO SKIPPING IN EXPLANATIONS
-════
-════════════════════════════════════════
-
-CRITICAL: You MUST create a bullet point in "Line-by-Line Explanation" for absolutely EVERY SINGLE line of code shown in the blocks above.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULE 3 — LINE-BY-LINE EXPLANATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Create a <li> bullet for EVERY SINGLE line of code. No skipping.
 Labels: 🔷 KEYWORD, 🟡 FUNCTION, 🟢 BUILT-IN, ⬜ CODE.
 
-════════════════════════════════════════════
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULE 4 — WRITING STYLE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Write like a kind teacher talking to a beginner. Use real-world analogies.
+Never use: iterate, traverse, instantiate, invoke, implement.
+Instead use: go through, run, create, call, step.
 
-Always provide a deep, step-by-step trace in the "Real-Time Test Case Execution".
-- Use the <div class="trace-block"> structure.
-- EVERY step must be its own <div class="trace-step">.
-- NEVER write steps as a single paragraph.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULE 5 — HTML ELEMENTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Heading: <h3>text</h3> | Paragraph: <p>text</p> | Bold: <strong>text</strong>
+List: <ul><li>item</li></ul> | Inline code: <code>name</code>
+Complexity: <span class="cx easy">O(n)</span> or cx medium or cx hard
+Tip box: <div class="tipb">tip text</div>
 
-Example:
-<div class="trace-block">
-  <div class="trace-step"><span class="trace-n">Input</span><span class="trace-desc">We start with...</span></div>
-  <div class="trace-step"><span class="trace-n">Step 1</span><span class="trace-desc">Calculate mid...</span></div>
-</div>
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULE 6 — ROADMAP MODE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Use this structure for each phase:
+<div class="rm-phase-grid"><div class="rm-phase-card"><div class="rm-phase-head"><span class="rm-phase-num">Phase 1</span><span class="rm-phase-time">⏱ 2–4 weeks</span></div><div class="rm-phase-title">Foundation</div><div class="rm-phase-skills"><span class="rm-skill">HTML Basics</span></div><div class="rm-phase-goal">Goal sentence here.</div></div></div>
+Show 4–6 phases: Beginner → Intermediate → Advanced → Expert.
+Add motivational paragraph and tipb box at end.
 
-════════════════════════════════════════════
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+RULE 7 — FILE UPLOADS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-RULE 6 — HTML ELEMENTS TO USE
-════
-════════════════════════════════════════
-- Paragraph: <p>text</p>
-- Bold word: <strong>word</strong>
-- Section heading: <h3>Heading</h3>
-- Bullet list: <ul><li>item</li></ul>
-- Code block: <pre><code data-lang="python">
-// Every line must be beautifully indented
-// One statement per line
-your code here
-</code></pre>
-- Inline code reference: <code>variable_name</code>
-- Time complexity: <span class="cx easy">O(n²)</span>  (or cx medium or cx hard)
-- Tip / encouragement: <div class="tipb">your tip here</div>
-
-════════════════════════════════════════════
-RULE 7 — WRITING STYLE
-════
-════════════════════════════════════════
-- Write explanations like a kind, patient teacher talking to a beginner
-- Use real-world analogies (like comparing a loop to shuffling cards)
-- NEVER use words like: iterate, traverse, instantiate, invoke, implement, algorithm (unless explaining it)
-- Instead use: go through, run, create, call, step, method, recipe
-
-════════════════════════════════════════════
-RULE 8 — END EVERY RESPONSE WITH A TIP
-════
-════════════════════════════════════════
-Always finish with: <div class="tipb">encouraging message for the student</div>
-
-════════════════════════════════════════════
-RULE 9 — ROADMAP MODE
-: DYNAMIC PHASE BOXES
-════════════════════════════════════════════
-When in Roadmap mode, use this EXACT structure for each phase (do NOT use rmg/rs classes):
-
-<div class="rm-phase-grid">
-  <div class="rm-phase-card">
-    <div class="rm-phase-head">
-      <span class="rm-phase-num">Phase 1</span>
-      <span class="rm-phase-time">⏱ 2–4 weeks</span>
-    </div>
-    <div class="rm-phase-title">Foundation</div>
-    <div class="rm-phase-skills">
-      <span class="rm-skill">HTML Basics</span>
-      <span class="rm-skill">CSS Selectors</span>
-      <span class="rm-skill">JavaScript Variables</span>
-    </div>
-    <div class="rm-phase-goal">By the end of this phase you will be able to build a simple web page.</div>
-  </div>
-  <div class="rm-phase-card">
-    ... next phase ...
-  </div>
-</div>
-
-Always show 4 to 6 phases going from Beginner → Intermediate → Advanced → Expert.
-Use real skill names as rm-skill tags. The rm-phase-time should be realistic for a student learning on their own.
-After the grid, add a short motivational paragraph and a tipb box.
-
-════════════════════════════════════════════
-RULE 10 — FILE UPLOADS
- (IMAGES, SCRIPTS, DOCUMENTS)
-════════════════════════════════════════════
-When a user uploads ANY file, you will receive its contents like [IMAGE UPLOADED: ...], [CODE/TEXT FILE: ...], or [PDF DOCUMENT: ...]:
-- CRITICAL: IGNORE RULE 1 (Do NOT generate Easy/Optimized tabs!).
-- Read the content and purely EXPLAIN the information logically in plain English paragraphs and bullet points.
-- If it's a code script, diagram, or pseudocode, explain what it is doing logically.
-- DO NOT output implemented code blocks unless the user explicitly types a written request like "Write the code for this" or "Fix and run this code".
-- NEVER write python/javascript code to try to open or process the raw file itself!`;
+When user uploads a file: SKIP RULE 1 entirely. Just explain what the file contains in plain paragraphs and bullet points. Only write code if user explicitly asks "write code for this".`;
 
 /* ══════════════════════════════════════
    SERVICE UNAVAILABLE BANNER
 ══════════════════════════════════════ */
+
 
 function showServiceBanner() {
   // Remove any existing banner
@@ -902,6 +868,7 @@ function showServiceBanner() {
 /* ══════════════════════════════════════
    SEND MESSAGE
 ══════════════════════════════════════ */
+
 async function sendMessage() {
   const inp  = document.getElementById('msgInput');
   const text = inp.value.trim();
@@ -954,7 +921,7 @@ async function sendMessage() {
   addTyping(tid); scrollToBottom();
 
   try {
-    const res   = await api('POST', '/api/chat', {
+    const res = await api('POST', '/api/chat', {
       system:   SYSTEM + '\n\nMode: ' + (hints[mode] || ''),
       messages: cd.history
     });
@@ -1008,6 +975,7 @@ async function sendMessage() {
 /* ══════════════════════════════════════
    RENDER MESSAGES
 ══════════════════════════════════════ */
+
 function renderMessage(role, content, isHTML) {
   const c  = document.getElementById('messages');
   const w  = document.createElement('div'); w.className = 'msg ' + role;
@@ -1028,6 +996,7 @@ function renderMessage(role, content, isHTML) {
   w.appendChild(av); w.appendChild(b); c.appendChild(w);
 }
 
+
 function wrapCodeBlocks(el) {
   el.querySelectorAll('pre').forEach(pre => {
     if (pre.closest('.code-wrap')) return;
@@ -1044,13 +1013,16 @@ function wrapCodeBlocks(el) {
   });
 }
 
+
 function addMessageActions(b) {
   const d = document.createElement('div'); d.className = 'msg-actions';
   d.innerHTML = `<button class="msg-action" onclick="regenerate()">↺ Regenerate</button><button class="msg-action" onclick="quickAsk('Give me a simpler beginner version')">↓ Simpler</button><button class="msg-action" onclick="quickAsk('Optimize this further for best performance')">⌬ Optimize</button><button class="msg-action" onclick="quickAsk('Show a real-world production example')">◎ Example</button>`;
   b.appendChild(d);
 }
 
+
 window.showSolution = function(btn, type) {
+
   const b = btn.closest('.msg-bubble'); if (!b) return;
   const easy = b.querySelector('.sol-easy'), opt = b.querySelector('.sol-opt');
   b.querySelectorAll('.sol-tab').forEach(t => t.classList.remove('active'));
@@ -1059,7 +1031,9 @@ window.showSolution = function(btn, type) {
   else                 { if (easy) easy.style.display = 'none'; if (opt) opt.style.display = ''; }
 };
 
+
 function processHTML(html) {
+
   return html.replace(/<code data-lang="([^"]*)">([\s\S]*?)<\/code>/g, (_, l, c) => `<code data-lang="${l}">${highlight(decode(c), l)}</code>`);
 }
 function decode(s) { return s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"'); }
@@ -1097,7 +1071,9 @@ function highlight(raw, lang) {
   return s;
 }
 
+
 function addTyping(id) {
+
   const c = document.getElementById('messages');
   const w = document.createElement('div'); w.className = 'msg ai'; w.id = id;
   const av = document.createElement('div'); av.className = 'msg-avatar ai'; av.textContent = '⚡';
@@ -1106,9 +1082,12 @@ function addTyping(id) {
   w.appendChild(av); w.appendChild(ind); c.appendChild(w);
 }
 
+
 function scrollToBottom() { const el = document.getElementById('messages'); setTimeout(() => el.scrollTop = el.scrollHeight, 80); }
 
+
 async function regenerate() {
+
   if (!activeId) return;
   const cd = cache[activeId];
   if (!cd || cd.history.length < 2) return;
@@ -1126,11 +1105,16 @@ async function regenerate() {
 /* ══════════════════════════════════════
    ADMIN
 ══════════════════════════════════════ */
+
 let _adminUsers = [];
 let _viewingUid = '';
 
+
+
+
 function openAdmin()  { if (CU?.role !== 'admin') return; document.getElementById('adminPanel').classList.add('open'); refreshAdmin(); }
 function closeAdmin() { document.getElementById('adminPanel').classList.remove('open'); }
+
 
 async function refreshAdmin() {
   const res = await api('GET', '/api/admin/users');
@@ -1188,6 +1172,7 @@ async function refreshAdmin() {
   renderUserTable(_adminUsers);
 }
 
+
 function renderUserTable(users) {
   document.getElementById('userTableBody').innerHTML = users.map(u => {
     const uid = u.userId || u.email;
@@ -1221,30 +1206,39 @@ function renderUserTable(users) {
   }).join('');
 }
 
+
 function filterUserTable() {
   const q = document.getElementById('userSearch').value.toLowerCase();
   renderUserTable(_adminUsers.filter(u => u.name.toLowerCase().includes(q) || (u.userId||'').toLowerCase().includes(q) || u.email.toLowerCase().includes(q)));
 }
+
 async function promoteUser(id) {
+
   if (!confirm(`Promote ${id} to admin?`)) return;
   const res = await api('PUT', `/api/admin/users/${id}/role`, { role:'admin' });
   if (res.error) return alert(res.error);
   refreshAdmin();
 }
+
 async function demoteUser(id) {
+
   if (!confirm(`Demote ${id} to user?`)) return;
   const res = await api('PUT', `/api/admin/users/${id}/role`, { role:'user' });
   if (res.error) return alert(res.error);
   refreshAdmin();
 }
+
 async function deleteUser(id) {
+
   if (!confirm(`Delete ${id} and all their data? This cannot be undone.`)) return;
   const res = await api('DELETE', `/api/admin/users/${id}`);
   if (res.error) return alert(res.error);
   refreshAdmin();
 }
 
+
 /* ── ADMIN: VIEW USER MESSAGES ── */
+
 async function viewUserMessages(uid, name) {
   _viewingUid = uid;
   document.getElementById('msgViewerTitle').textContent = `${name}'s Conversations`;
@@ -1280,17 +1274,23 @@ async function viewUserMessages(uid, name) {
     </div>`).join('');
 }
 
+
 function closeMsgViewer() {
+
   document.getElementById('msgViewerModal').classList.remove('open');
   _viewingUid = '';
 }
 
+
 function downloadUserMessages() {
+
   if (!_viewingUid) return;
   window.open(`/api/admin/users/${_viewingUid}/messages/download`, '_blank');
 }
 
+
 function timeAgo(ts) {
+
   const s = Math.floor((Date.now() - ts) / 1000);
   if (s < 60)    return 'just now';
   if (s < 3600)  return Math.floor(s/60) + 'm ago';
