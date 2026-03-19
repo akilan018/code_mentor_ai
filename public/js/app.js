@@ -1,4 +1,6 @@
 /* ══════════════════════════════════════════════════
+
+
    CodeMentor AI — app.js (v6)
    - Brevo email, Gemini key hierarchy
    - Settings modal: name / userId / password
@@ -6,6 +8,8 @@
    - Global admin protections
    - Desktop hamburger sidebar
 ══════════════════════════════════════════════════ */
+
+
 
 /* ── STATE ── */
 let CU = null, mode = 'code', lang = 'Auto', busy = false, activeId = null, cache = {};
@@ -110,8 +114,12 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 })();
 
 /* ══════════════════════════════════════
+
+
    AUTH TABS
 ══════════════════════════════════════ */
+
+
 function switchAuthTab(tab) {
   ['login','reg','forgot'].forEach(t => {
     document.getElementById('form-' + t).style.display = 'none';
@@ -136,8 +144,12 @@ function clearAuthErrors() {
 }
 
 /* ══════════════════════════════════════
+
+
    SIGN IN
 ══════════════════════════════════════ */
+
+
 async function doLogin() {
   const userId   = document.getElementById('loginUserId').value.trim();
   const password = document.getElementById('loginPass').value;
@@ -178,7 +190,7 @@ async function doLogout() {
   ['regName','regUserId','regEmail','regPass','regSecAnswer'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
-  
+
   // Clear displayed user details so they don't leak
   const userNameEl = document.getElementById('userName');
   if (userNameEl) userNameEl.textContent = '—';
@@ -188,7 +200,7 @@ async function doLogout() {
   if (roleEl) { roleEl.textContent = 'member'; roleEl.className = 'user-role'; }
   document.getElementById('sbAdminBtn').style.display = 'none';
   document.getElementById('topAdminBtn').style.display = 'none';
-  
+
   document.getElementById('uidHint').textContent = '';
   document.getElementById('pwHint').textContent  = 'Enter a password';
   ['pb1','pb2','pb3'].forEach(id => { const el = document.getElementById(id); if (el) el.className = 'pw-bar'; });
@@ -197,8 +209,12 @@ async function doLogout() {
 }
 
 /* ══════════════════════════════════════
+
+
    REGISTER (2 steps: info → OTP)
 ══════════════════════════════════════ */
+
+
 function checkUid(val) {
   const hint = document.getElementById('uidHint');
   if (!val) { hint.textContent = ''; return; }
@@ -315,11 +331,15 @@ async function verifyRegOtp() {
 }
 
 /* ══════════════════════════════════════
+
+
    FORGOT PASSWORD — 3-step OTP flow
    Step 1: Enter userId → OTP emailed
    Step 2: Enter OTP → get reset token
    Step 3: Set new password
 ══════════════════════════════════════ */
+
+
 async function doForgotSendOtp() {
   const userId = document.getElementById('forgotUserId').value.trim();
   const err    = document.getElementById('forgotErr');
@@ -382,8 +402,12 @@ async function doForgotReset() {
 }
 
 /* ══════════════════════════════════════
+
+
    CHANGE PASSWORD
 ══════════════════════════════════════ */
+
+
 function openPasswordModal() {
   ['pwCurrent','pwSecAnswer','pwNew','pwConfirm'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
@@ -415,7 +439,7 @@ async function doChangePassword() {
   });
   if (res.error) { err.textContent = res.error; return; }
   ok.textContent = '✓ ' + res.message;
-  
+
   // Clear the inputs immediately to prevent cache / back-button stealing
   document.getElementById('pwCurrent').value = '';
   if (document.getElementById('pwSecAnswer')) document.getElementById('pwSecAnswer').value = '';
@@ -429,8 +453,12 @@ async function doChangePassword() {
 }
 
 /* ══════════════════════════════════════
+
+
    SIDEBAR
 ══════════════════════════════════════ */
+
+
 function toggleSidebar() {
   const sb   = document.getElementById('sidebar');
   const ov   = document.getElementById('ov');
@@ -523,8 +551,12 @@ function openPasswordModal()  { openSettingsModal(); switchSettingsTab('password
 function closePasswordModal() { closeSettingsModal(); }
 
 /* ══════════════════════════════════════
+
+
    CHAT LIST
 ══════════════════════════════════════ */
+
+
 async function loadChatList() {
   const res   = await api('GET', '/api/chats');
   const list  = document.getElementById('chatList');
@@ -637,8 +669,12 @@ function goHome() {
 }
 
 /* ══════════════════════════════════════
+
+
    WELCOME SCREEN
 ══════════════════════════════════════ */
+
+
 function showWelcome() {
   document.getElementById('messages').innerHTML = `
     <div class="welcome" id="welcomeScreen">
@@ -662,8 +698,12 @@ function showWelcome() {
 }
 
 /* ══════════════════════════════════════
+
+
    MODE & LANG
 ══════════════════════════════════════ */
+
+
 function setMode(m, el) {
   mode = m;
   document.querySelectorAll('.mode-pill').forEach(p => p.classList.remove('active'));
@@ -684,14 +724,22 @@ function autoResize(el) { el.style.height = 'auto'; el.style.height = Math.min(e
 function quickAsk(t) { document.getElementById('msgInput').value = t; autoResize(document.getElementById('msgInput')); sendMessage(); }
 
 /* ══════════════════════════════════════
+
+
    SYSTEM PROMPT
 ══════════════════════════════════════ */
+
+
 const SYSTEM = `You are CodeMentor AI — a friendly coding teacher for beginners and students.
 Respond in PURE HTML ONLY. Zero markdown. Zero asterisks. Zero hash symbols. Zero backticks.
 
 ════════════════════════════════════════════
+
+
 RULE 1 — ALWAYS GIVE TWO CODE VERSIONS
 ════════════════════════════════════════════
+
+
 Unless the user uploaded ANY file (like an image, PDF, document, or code script), structure EVERY plain code request like this:
 
 <h3>🧠 Concept Explanation</h3>
@@ -701,7 +749,10 @@ Unless the user uploaded ANY file (like an image, PDF, document, or code script)
 <div class="sol-easy">
 <p>[How the Easy version works]</p>
 [CODE with green comments on EVERY single line, never smashed]
-<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><code>output here</code></div></div>
+<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><pre class="out-pre">Input : [the exact input values used in the code]
+Output: [the exact result printed or returned]
+Reason: [one short sentence explaining why this is correct]</pre></div></div>
+<div class="test-block"><div class="test-header">🧪 Test Cases</div><div class="test-body"><table class="test-table"><thead><tr><th>Input</th><th>Expected Output</th><th>Result</th></tr></thead><tbody><tr><td>[real input 1]</td><td>[expected output 1]</td><td class="pass">✓ Pass</td></tr><tr><td>[real input 2]</td><td>[expected output 2]</td><td class="pass">✓ Pass</td></tr><tr><td>[real input 3 — edge case]</td><td>[expected output 3]</td><td class="pass">✓ Pass</td></tr></tbody></table></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
 <ul>
 <li><strong>🔷 KEYWORD</strong> <code>def</code> — Explanation...</li>
@@ -712,26 +763,43 @@ Unless the user uploaded ANY file (like an image, PDF, document, or code script)
 <div class="sol-opt" style="display:none">
 <p>[Why this Optimized version is better]</p>
 [OPTIMIZED CODE with green comments]
-<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><code>output here</code></div></div>
+<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><pre class="out-pre">Input : [the exact input values used in the code]
+Output: [the exact result printed or returned]
+Reason: [one short sentence explaining why this is correct]</pre></div></div>
+<div class="test-block"><div class="test-header">🧪 Test Cases</div><div class="test-body"><table class="test-table"><thead><tr><th>Input</th><th>Expected Output</th><th>Result</th></tr></thead><tbody><tr><td>[real input 1]</td><td>[expected output 1]</td><td class="pass">✓ Pass</td></tr><tr><td>[real input 2]</td><td>[expected output 2]</td><td class="pass">✓ Pass</td></tr><tr><td>[real input 3 — edge case]</td><td>[expected output 3]</td><td class="pass">✓ Pass</td></tr></tbody></table></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
 <ul><li>... (full list for ALL lines here) ...</li></ul>
 </div>
 
 ════════════════════════════════════════════
+
+
 RULE 2 — CODE FORMAT & COMMENTS
 ════════════════════════════════════════════
+
+
 CRITICAL: Every line of code MUST have a comment.
 - Green comment on one line, actual code on the VERY NEXT line.
 - NEVER put multiple code statements on a single line.
-- Use correctly syntax (// or #).
+- Use correct syntax (// for Java/JS/C++, # for Python).
+- JAVA CRITICAL: ALL standalone Java methods MUST use public static.
+  NEVER write just public alone for a method. Always write public static.
+  Example: public static int[] twoSum(int[] nums, int target)
+  Example: public static void main(String[] args)
 
 ════════════════════════════════════════════
+
+
 RULE 3 — NO SKIPPING IN EXPLANATIONS
 ════════════════════════════════════════════
+
+
 CRITICAL: You MUST create a bullet point in "Line-by-Line Explanation" for absolutely EVERY SINGLE line of code shown in the blocks above.
 Labels: 🔷 KEYWORD, 🟡 FUNCTION, 🟢 BUILT-IN, ⬜ CODE.
 
 ════════════════════════════════════════════
+
+
 Always provide a deep, step-by-step trace in the "Real-Time Test Case Execution".
 - Use the <div class="trace-block"> structure.
 - EVERY step must be its own <div class="trace-step">.
@@ -744,6 +812,8 @@ Example:
 </div>
 
 ════════════════════════════════════════════
+
+
 RULE 6 — HTML ELEMENTS TO USE
 ════════════════════════════════════════════
 - Paragraph: <p>text</p>
@@ -872,12 +942,12 @@ async function sendMessage() {
   const cd = cache[activeId];
   // If there's a file, render a small indicator to the user
   const displayContent = currentFile ? `📎 [Attached: ${currentFile.name}]\n\n${text}` : text;
-  
+
   cd.rendered.push({ role: 'user', content: displayContent, isHTML: false });
   renderMessage('user', displayContent, false);
   inp.value = ''; inp.style.height = 'auto';
   document.getElementById('charCount').textContent = '0 / 2000';
-  
+
   const payloadText = text || 'Please analyze the attached file.';
   const msgPayload = { role: 'user', content: `[MODE:${mode.toUpperCase()}][LANG:${lang}]\n\n${payloadText}` };
   if (currentFile) {
@@ -913,7 +983,7 @@ async function sendMessage() {
 
     const listRes  = await api('GET', '/api/chats');
     const meta     = (listRes.chats || []).find(c => c.id === activeId);
-    
+
     // Auto-rename chat if it is still named 'New Chat'
     if (meta?.title === 'New Chat') {
       let newTitle = text.slice(0, 40) + (text.length > 40 ? '…' : '');
