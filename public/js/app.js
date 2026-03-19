@@ -107,7 +107,6 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
   else document.getElementById('authModal').classList.add('open');
 })();
 
-
 /* ══════════════════════════════════════
 
    AUTH TABS
@@ -720,7 +719,7 @@ Unless the user uploaded ANY file (like an image, PDF, document, or code script)
 <div class="solution-tabs"><button class="sol-tab easy-tab active" onclick="showSolution(this,'easy')">⬡ Easy</button><button class="sol-tab opt-tab" onclick="showSolution(this,'optimized')">⌬ Optimized</button></div>
 <div class="sol-easy">
 <p>[How the Easy version works]</p>
-[CODE with green comments on EVERY single line, never smashed]
+[ONE complete runnable code block — comment ABOVE each code line, never on same line, never after code]
 <div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [the exact input values used in this code]</p><p class="out-line"><strong>Result &nbsp;:</strong> [the exact output value printed or returned]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [one short sentence — why is this the correct answer]</p></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
 <ul>
@@ -731,7 +730,7 @@ Unless the user uploaded ANY file (like an image, PDF, document, or code script)
 </div>
 <div class="sol-opt" style="display:none">
 <p>[Why this Optimized version is better]</p>
-[OPTIMIZED CODE with green comments]
+[ONE optimized runnable code block — comment ABOVE each code line, never on same line]
 <div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [the exact input values used in this code]</p><p class="out-line"><strong>Result &nbsp;:</strong> [the exact output value printed or returned]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [one short sentence — why is this the correct answer]</p></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
 <ul><li>... (full list for ALL lines here) ...</li></ul>
@@ -740,12 +739,20 @@ Unless the user uploaded ANY file (like an image, PDF, document, or code script)
 ════════════════════════════════════════════
 
 RULE 2 — CODE FORMAT & COMMENTS
-════════════════════════════════════════════
+════
+════════════════════════════════════════
 
-CRITICAL: Every line of code MUST have a comment.
-- Green comment on one line, actual code on the VERY NEXT line.
-- NEVER put multiple code statements on a single line.
-- Use correct syntax (// for Java/C/JS/C++, # for Python).
+CRITICAL COMMENT FORMAT — Read carefully and follow exactly:
+
+WRONG: int arr[] = {1,2,3}; // Create array  ← comment after code, WRONG
+RIGHT:
+  // Create an array with three numbers
+  int arr[] = {1, 2, 3};
+  // Loop from first to last
+  for (int i = 0; i < 3; i++) {
+Rule: comment on its OWN line ABOVE the code. Never after. Never same line.
+Use: // for Java/C/JS/C++  |  # for Python
+
 
 LAYOUT CRITICAL — NO PARALLEL / SIDE-BY-SIDE CODE EVER:
 - NEVER place two code blocks next to each other horizontally.
@@ -754,7 +761,6 @@ LAYOUT CRITICAL — NO PARALLEL / SIDE-BY-SIDE CODE EVER:
 - Easy version first → then Optimized version below it (hidden by tab).
 
 FULL PROGRAM WRAPPERS — ALWAYS wrap in complete runnable program:
-
 JAVA — ALWAYS use full class. NEVER show a bare method alone.
   Use data-lang="java" on the code block.
   public class Main {
@@ -765,33 +771,21 @@ JAVA — ALWAYS use full class. NEVER show a bare method alone.
       // method body here
     }
   }
-
 C — ALWAYS include #include headers and int main(). NEVER show a bare function.
-  Use data-lang="c" on the code block.
-  CRITICAL: The data-lang attribute MUST be exactly "c" (lowercase).
-  #include <stdio.h>
-  #include <stdlib.h>
-  // function definition above main
-  int methodName(int arr[], int n, int target) {
-    // function body
-  }
-  int main() {
-    // declare variables and call the function here
-    printf("Result: ...");
-    return 0;
-  }
-
+  data-lang="c" (MUST be lowercase c). #include <stdio.h> at top.
+  int methodName(int arr[], int n) { /* body */ }
+  int main() { /* call function, printf result, return 0; */ }
 PYTHON — ALWAYS wrap with if __name__ == "__main__":
   Use data-lang="python" on the code block.
   def method_name(...):
     # function body
   if __name__ == "__main__":
     # call the function and print result here
-
 ════════════════════════════════════════════
 
 RULE 3 — NO SKIPPING IN EXPLANATIONS
-════════════════════════════════════════════
+════
+════════════════════════════════════════
 
 CRITICAL: You MUST create a bullet point in "Line-by-Line Explanation" for absolutely EVERY SINGLE line of code shown in the blocks above.
 Labels: 🔷 KEYWORD, 🟡 FUNCTION, 🟢 BUILT-IN, ⬜ CODE.
@@ -812,7 +806,8 @@ Example:
 ════════════════════════════════════════════
 
 RULE 6 — HTML ELEMENTS TO USE
-════════════════════════════════════════════
+════
+════════════════════════════════════════
 - Paragraph: <p>text</p>
 - Bold word: <strong>word</strong>
 - Section heading: <h3>Heading</h3>
@@ -828,7 +823,8 @@ your code here
 
 ════════════════════════════════════════════
 RULE 7 — WRITING STYLE
-════════════════════════════════════════════
+════
+════════════════════════════════════════
 - Write explanations like a kind, patient teacher talking to a beginner
 - Use real-world analogies (like comparing a loop to shuffling cards)
 - NEVER use words like: iterate, traverse, instantiate, invoke, implement, algorithm (unless explaining it)
@@ -836,11 +832,13 @@ RULE 7 — WRITING STYLE
 
 ════════════════════════════════════════════
 RULE 8 — END EVERY RESPONSE WITH A TIP
-════════════════════════════════════════════
+════
+════════════════════════════════════════
 Always finish with: <div class="tipb">encouraging message for the student</div>
 
 ════════════════════════════════════════════
-RULE 9 — ROADMAP MODE: DYNAMIC PHASE BOXES
+RULE 9 — ROADMAP MODE
+: DYNAMIC PHASE BOXES
 ════════════════════════════════════════════
 When in Roadmap mode, use this EXACT structure for each phase (do NOT use rmg/rs classes):
 
@@ -868,7 +866,8 @@ Use real skill names as rm-skill tags. The rm-phase-time should be realistic for
 After the grid, add a short motivational paragraph and a tipb box.
 
 ════════════════════════════════════════════
-RULE 10 — FILE UPLOADS (IMAGES, SCRIPTS, DOCUMENTS)
+RULE 10 — FILE UPLOADS
+ (IMAGES, SCRIPTS, DOCUMENTS)
 ════════════════════════════════════════════
 When a user uploads ANY file, you will receive its contents like [IMAGE UPLOADED: ...], [CODE/TEXT FILE: ...], or [PDF DOCUMENT: ...]:
 - CRITICAL: IGNORE RULE 1 (Do NOT generate Easy/Optimized tabs!).
@@ -1070,9 +1069,10 @@ function highlight(raw, lang) {
   let s = raw.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
   const KW = {
     python:     /\b(def|class|return|if|elif|else|for|while|import|from|in|not|and|or|True|False|None|print|self|with|as|try|except|finally|lambda|yield|pass|break|continue|raise|async|await)\b/g,
-    javascript: /\b(function|const|let|var|return|if|else|for|while|class|new|this|import|export|default|async|await|true|false|null|undefined|typeof|switch|case|break|continue|throw|try|catch|finally|of|in|static|extends|int|float|double|bool|boolean|string|char|void)\b/g,
-    typescript: /\b(function|const|let|var|return|if|else|for|while|class|interface|type|enum|extends|implements|public|private|protected|readonly|abstract|async|await|import|export|default|true|false|null|undefined|int|float|double|bool|boolean|string|char|void)\b/g,
+    javascript: /\b(function|const|let|var|return|if|else|for|while|class|new|this|import|export|default|async|await|true|false|null|undefined|typeof|switch|case|break|continue|throw|try|catch|finally|of|in|static|extends)\b/g,
+    typescript: /\b(function|const|let|var|return|if|else|for|while|class|interface|type|enum|extends|implements|public|private|protected|readonly|abstract|async|await|import|export|default|true|false|null|undefined)\b/g,
     java:       /\b(public|private|protected|class|void|int|long|double|float|boolean|String|return|if|else|for|while|new|static|final|import|null|true|false|this|extends|implements|try|catch|finally|throw|super|switch|case|break)\b/g,
+    c:          /\b(int|long|double|float|char|void|return|if|else|for|while|do|switch|case|break|continue|struct|typedef|enum|const|static|extern|sizeof|include|define|printf|scanf|malloc|free|NULL)\b/g,
     go:         /\b(func|var|const|type|struct|interface|return|if|else|for|range|import|package|nil|true|false|make|new|len|append|defer|go|select|chan|map|string|int|bool)\b/g,
     rust:       /\b(fn|let|mut|const|struct|enum|impl|trait|return|if|else|for|while|loop|match|use|mod|pub|self|true|false|None|Some|Ok|Err|String|Vec|async|await)\b/g,
     sql:        /\b(SELECT|FROM|WHERE|AND|OR|NOT|INSERT|INTO|VALUES|UPDATE|SET|DELETE|CREATE|TABLE|DROP|JOIN|LEFT|RIGHT|ON|GROUP|BY|ORDER|HAVING|LIMIT|AS|COUNT|SUM|AVG|NULL|PRIMARY|KEY)\b/gi,
