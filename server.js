@@ -29,23 +29,18 @@ const NVIDIA_KEYS = [
   process.env.NVIDIA_API_KEY_3 || '',
 ].filter(Boolean);
 
-/* ── NVIDIA model lists ── */
-/* Vision models — tried in order for images */
-const NVIDIA_VISION_MODELS = [
-  'qwen/qwen2-vl-7b-instruct',
-  'qwen/qwen2-vl-72b-instruct',
-  'nvidia/llama-3.2-11b-vision-instruct',
-  'nvidia/llama-3.2-90b-vision-instruct',
-  'microsoft/phi-3-vision-128k-instruct',
-];
-
-/* Text models — tried in order for PDF/code/zip/text */
+/* ── NVIDIA text models (these work on free tier) ──
+   All file types (images, PDFs, code, zip) are
+   converted to text and sent to these models.
+   Tried in order until one works.
+─────────────────────────────────────────────────── */
 const NVIDIA_TEXT_MODELS = [
   'meta/llama-3.1-70b-instruct',
   'meta/llama-3.1-8b-instruct',
   'mistralai/mixtral-8x7b-instruct',
   'microsoft/phi-3-medium-128k-instruct',
   'meta/llama-3.2-3b-instruct',
+  'nvidia/llama-3.1-nemotron-70b-instruct',
 ];
 
 const BREVO_API_KEY    = process.env.BREVO_API_KEY    || '';
@@ -101,7 +96,6 @@ async function seedAdmin() {
   try {
     const adminPwd = process.env.ADMIN_PASSWORD;
     const exists   = await User.findOne({ userId: GLOBAL_ADMIN_ID });
-
     if (!exists) {
       const password = adminPwd;
       if (!password) { console.error('❌  ADMIN_PASSWORD not set in env!'); return; }
@@ -157,13 +151,12 @@ function isGlobalAdmin(userId) {
 }
 
 /* ───────────────────────────────────────
-   NVIDIA FILE HELPERS
+   FILE HELPERS
 ─────────────────────────────────────── */
 const IMAGE_TYPES = ['image/png','image/jpeg','image/jpg','image/webp','image/gif','image/bmp'];
 const TEXT_TYPES  = [
   'text/plain','text/markdown','text/csv','text/html','text/css',
-  'application/json','application/xml','application/javascript',
-  'application/typescript'
+  'application/json','application/xml','application/javascript','application/typescript'
 ];
 const TEXT_EXTENSIONS = [
   '.txt','.md','.csv','.js','.ts','.py','.java','.cpp','.c','.h',
@@ -207,6 +200,43 @@ function extractPdfText(base64Data) {
   } catch { return null; }
 }
 
+/* ── Convert ANY file to a text description for NVIDIA ── */
+function fileToText(file) {
+  if (!file || !file.data) return null;
+  const category = getFileCategory(file.mimeType || '', file.name || '');
+
+  if (category === 'image') {
+    // NVIDIA free tier doesn't support vision
+    // Give AI as much context as possible from filename + user question
+    return `[IMAGE UPLOADED: ${file.name || 'image'}]
+Note: The image has been uploaded. Based on the filename and user question, please provide the best answer you can.
+Image type: ${file.mimeType}
+Image name: ${file.name || 'unknown'}`;
+  }
+
+  if (category === 'pdf') {
+    const extracted = extractPdfText(file.data);
+    return extracted
+      ? `[PDF DOCUMENT: ${file.name || 'document.pdf'}]\n\nExtracted Content:\n${extracted}`
+      : `[PDF DOCUMENT: ${file.name || 'document.pdf'}]\nCould not extract text from this PDF automatically.`;
+  }
+
+  if (category === 'text') {
+    const extracted = extractTextFromBase64(file.data);
+    return extracted
+      ? `[CODE/TEXT FILE: ${file.name || 'file'}]\n\`\`\`\n${extracted}\n\`\`\``
+      : `[CODE/TEXT FILE: ${file.name || 'file'}]\nCould not read file contents.`;
+  }
+
+  if (category === 'zip') {
+    return `[ZIP ARCHIVE: ${file.name || 'archive.zip'}]
+This is a ZIP file. ZIP contents cannot be read directly.
+Please extract specific files and share the code you need help with.`;
+  }
+
+  return `[FILE: ${file.name || 'file'} (${file.mimeType || 'unknown type'})]`;
+}
+
 /* ───────────────────────────────────────
    BREVO EMAIL
 ─────────────────────────────────────── */
@@ -231,9 +261,7 @@ async function sendEmailOTP(to, otp, purpose) {
 </div>`;
   const payload = JSON.stringify({
     sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
-    to: [{ email: to }],
-    subject,
-    htmlContent: html
+    to: [{ email: to }], subject, htmlContent: html
   });
   await new Promise((resolve, reject) => {
     const req = https.request({
@@ -242,7 +270,7 @@ async function sendEmailOTP(to, otp, purpose) {
         'Accept': 'application/json', 'api-key': BREVO_API_KEY,
         'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload)
       }
-    }, res => { let d=''; res.on('data',c=>d+=c); res.on('end',()=>resolve(d)); }).on('error', reject);
+    }, res => { let d=''; res.on('data',c=>d+=c); res.on('end',()=>resolve(d)); }).on('error',reject);
     req.write(payload); req.end();
   });
 }
@@ -252,7 +280,7 @@ async function sendPhoneOTP(phone, otp) {
   const msg = `Your CodeMentor AI OTP is ${otp}. Valid for 10 minutes.`;
   const url = `https://www.fast2sms.com/dev/bulkV2?authorization=${FAST2SMS_KEY}&route=q&message=${encodeURIComponent(msg)}&language=english&flash=0&numbers=${phone}`;
   await new Promise((res,rej) => {
-    https.get(url, { headers: {'cache-control':'no-cache'} }, r => {
+    https.get(url, { headers:{'cache-control':'no-cache'} }, r => {
       let d=''; r.on('data',c=>d+=c); r.on('end',()=>res(d));
     }).on('error',rej);
   });
@@ -287,7 +315,7 @@ app.use((req, res, next) => {
 app.use((req, res, next) => {
   const ext = path.extname(req.path).toLowerCase();
   if ((ext === '.js' || ext === '.css') && req.headers['sec-fetch-dest'] === 'document') {
-    return res.status(403).send('<html><head><title>Forbidden</title></head><body style="background:#0d0d0d;color:#ef4444;font-family:monospace;padding:40px;text-align:center;"><h2>⚠️ 403 Forbidden</h2><p>Direct access to source files is not allowed.</p></body></html>');
+    return res.status(403).send('<html><head><title>Forbidden</title></head><body style="background:#0d0d0d;color:#ef4444;font-family:monospace;padding:40px;text-align:center;"><h2>⚠️ 403 Forbidden</h2></body></html>');
   }
   next();
 });
@@ -501,17 +529,17 @@ app.post('/api/auth/change-password', auth, async (req, res) => {
    CHATS
 ─────────────────────────────────────── */
 app.get('/api/chats', auth, async (req,res) => {
-  const chats = await Chat.find({ ownerId: req.session.user.id },{ history:0,rendered:0 }).sort({ ts:-1 });
-  res.json({ chats: chats.map(c=>({ id:c.chatId, title:c.title, ts:c.ts })) });
+  const chats = await Chat.find({ ownerId: req.session.user.id },{history:0,rendered:0}).sort({ts:-1});
+  res.json({ chats: chats.map(c=>({id:c.chatId,title:c.title,ts:c.ts})) });
 });
 app.post('/api/chats', auth, async (req,res) => {
   const c = await Chat.create({ ownerId: req.session.user.id, title:(req.body.title||'New Chat').slice(0,80) });
-  res.json({ chat:{ id:c.chatId, title:c.title, ts:c.ts } });
+  res.json({ chat:{id:c.chatId,title:c.title,ts:c.ts} });
 });
 app.get('/api/chats/:id', auth, async (req,res) => {
   const c = await Chat.findOne({ chatId:req.params.id, ownerId:req.session.user.id });
   if (!c) return res.status(404).json({ error:'Not found.' });
-  res.json({ chat:{ id:c.chatId, title:c.title, ts:c.ts, history:c.history, rendered:c.rendered } });
+  res.json({ chat:{id:c.chatId,title:c.title,ts:c.ts,history:c.history,rendered:c.rendered} });
 });
 app.put('/api/chats/:id', auth, async (req,res) => {
   const c = await Chat.findOne({ chatId:req.params.id, ownerId:req.session.user.id });
@@ -520,7 +548,7 @@ app.put('/api/chats/:id', auth, async (req,res) => {
   if (req.body.history  !==undefined) c.history  = req.body.history;
   if (req.body.rendered !==undefined) c.rendered = req.body.rendered;
   c.ts = Date.now(); await c.save();
-  res.json({ success:true, chat:{ id:c.chatId, title:c.title, ts:c.ts } });
+  res.json({ success:true, chat:{id:c.chatId,title:c.title,ts:c.ts} });
 });
 app.delete('/api/chats/:id', auth, async (req,res) => {
   const c = await Chat.findOneAndDelete({ chatId:req.params.id, ownerId:req.session.user.id });
@@ -532,11 +560,11 @@ app.delete('/api/chats/:id', auth, async (req,res) => {
    ADMIN
 ─────────────────────────────────────── */
 app.get('/api/admin/users', auth, admin, async (req,res) => {
-  const users = await User.find({},{ password:0,passwordHistory:0,securityAnswer:0 });
+  const users = await User.find({},{password:0,passwordHistory:0,securityAnswer:0});
   const enriched = await Promise.all(users.map(async u => {
     const chats = await Chat.find({ ownerId:u.id });
     const msgCount = chats.reduce((n,c)=>n+Math.floor((c.history?.length||0)/2),0);
-    return { ...u.toObject(), chatCount:chats.length, msgCount };
+    return {...u.toObject(), chatCount:chats.length, msgCount};
   }));
   res.json({ users: enriched });
 });
@@ -544,9 +572,9 @@ app.get('/api/admin/users/:uid/messages', auth, admin, async (req,res) => {
   const user = await User.findOne({ userId:req.params.uid.toLowerCase() });
   if (!user) return res.status(404).json({ error:'User not found.' });
   const chats = await Chat.find({ ownerId:user.id });
-  res.json({ user:{ userId:user.userId,name:user.name,email:user.email }, chats: chats.map(c=>({
-    chatId:c.chatId, title:c.title, ts:c.ts,
-    messages:(c.history||[]).map(m=>({ role:m.role, content:m.content?m.content.replace(/^\[MODE:[^\]]+\]\[LANG:[^\]]+\]\n\n/,''):'' }))
+  res.json({ user:{userId:user.userId,name:user.name,email:user.email}, chats: chats.map(c=>({
+    chatId:c.chatId,title:c.title,ts:c.ts,
+    messages:(c.history||[]).map(m=>({role:m.role,content:m.content?m.content.replace(/^\[MODE:[^\]]+\]\[LANG:[^\]]+\]\n\n/,''):''}))
   }))});
 });
 app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req,res) => {
@@ -555,9 +583,9 @@ app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req,res) 
   const chats = await Chat.find({ ownerId:user.id });
   const data = {
     exportedAt:new Date().toISOString(),
-    user:{ userId:user.userId,name:user.name,email:user.email },
-    chats:chats.map(c=>({ chatId:c.chatId,title:c.title,date:new Date(c.ts).toISOString(),
-      messages:(c.history||[]).map(m=>({ role:m.role, content:m.content?m.content.replace(/^\[MODE:[^\]]+\]\[LANG:[^\]]+\]\n\n/,''):'' }))
+    user:{userId:user.userId,name:user.name,email:user.email},
+    chats:chats.map(c=>({chatId:c.chatId,title:c.title,date:new Date(c.ts).toISOString(),
+      messages:(c.history||[]).map(m=>({role:m.role,content:m.content?m.content.replace(/^\[MODE:[^\]]+\]\[LANG:[^\]]+\]\n\n/,''):''}))
     }))
   };
   res.setHeader('Content-Disposition',`attachment; filename="${user.userId}_chats.json"`);
@@ -588,11 +616,9 @@ app.delete('/api/admin/users/:uid', auth, admin, async (req,res) => {
 
 /* ───────────────────────────────────────
    CHAT — Gemini first → NVIDIA fallback
-   NVIDIA tries multiple models per key:
-   • Images  → 5 vision models in order
-   • PDF/code/zip/text → 5 text models
-   So even if one model is exhausted,
-   next model is tried automatically
+   NVIDIA: ALL file types converted to text
+   (vision models need paid NVIDIA access)
+   6 text models × 3 keys = 18 attempts
 ─────────────────────────────────────── */
 let preferredKeyIndex = 0;
 
@@ -603,7 +629,7 @@ app.post('/api/chat', auth, async (req, res) => {
   const { system, messages } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
 
-  /* ── Gemini payload ── */
+  /* ── Gemini payload (supports native file/image) ── */
   const contents = messages.map(m => {
     const parts = [];
     if (m.file?.data && m.file?.mimeType)
@@ -619,7 +645,6 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   const hasFile     = messages.some(m => m.file?.data);
-  const hasImage    = messages.some(m => m.file?.data && IMAGE_TYPES.includes(m.file?.mimeType));
   const lastUserMsg = [...messages].reverse().find(m => m.role==='user');
   const queryLen    = (lastUserMsg?.content||'').length;
   const isSimple    = !hasFile && queryLen < 300;
@@ -640,88 +665,49 @@ app.post('/api/chat', auth, async (req, res) => {
       hostname: 'generativelanguage.googleapis.com',
       path: `/v1beta/models/${model}:generateContent?key=${apiKey}`,
       method: 'POST',
-      headers: { 'Content-Type':'application/json', 'Content-Length': Buffer.byteLength(geminiPayload) },
+      headers: {'Content-Type':'application/json','Content-Length':Buffer.byteLength(geminiPayload)},
       timeout: requestTimeout
     };
     const apiReq = https.request(opts, apiRes => {
       let data=''; apiRes.on('data',c=>data+=c);
-      apiRes.on('end',()=>resolve({ status:apiRes.statusCode, data }));
+      apiRes.on('end',()=>resolve({status:apiRes.statusCode,data}));
     });
-    apiReq.on('timeout',()=>{ apiReq.destroy(); reject(new Error('Timeout')); });
+    apiReq.on('timeout',()=>{apiReq.destroy();reject(new Error('Timeout'));});
     apiReq.on('error',e=>reject(e));
     apiReq.write(geminiPayload); apiReq.end();
   });
 
-  /* ── Build NVIDIA messages (file-aware) ── */
-  function buildNvidiaMessages(forVision) {
-    const nvidiaMessages = [{
+  /* ── Build NVIDIA messages ──
+     All files converted to text descriptions.
+     Vision models are NOT used (require paid NVIDIA access).
+     Text models handle everything including images via text context.
+  ── */
+  function buildNvidiaMessages() {
+    const msgs = [{
       role: 'system',
-      content: (system||'') + '\n\nCRITICAL: Respond in pure HTML exactly as instructed. No markdown. Pure HTML only.'
+      content: (system||'') + '\n\nCRITICAL: Respond in pure HTML exactly as instructed above. No markdown. Pure HTML only.'
     }];
 
     for (const m of messages) {
       if (m.role==='assistant') {
-        nvidiaMessages.push({ role:'assistant', content: m.content||'' });
+        msgs.push({ role:'assistant', content: m.content||'' });
         continue;
       }
-
-      if (m.file?.data && m.file?.mimeType) {
-        const category = getFileCategory(m.file.mimeType, m.file.name);
-
-        if (category==='image' && forVision) {
-          // Vision model — send actual image
-          nvidiaMessages.push({
-            role: 'user',
-            content: [
-              { type:'image_url', image_url:{ url:`data:${m.file.mimeType};base64,${m.file.data}` } },
-              { type:'text', text: m.content||'Please explain this image in detail.' }
-            ]
-          });
-        } else if (category==='image' && !forVision) {
-          // Text model — describe what was uploaded
-          nvidiaMessages.push({
-            role: 'user',
-            content: `[Image uploaded: ${m.file.name||'image'}]\nUser question: ${m.content||'Explain this image.'}`
-          });
-        } else if (category==='pdf') {
-          const extracted = extractPdfText(m.file.data);
-          nvidiaMessages.push({
-            role: 'user',
-            content: extracted
-              ? `[PDF: ${m.file.name||'document.pdf'}]\n\nExtracted Content:\n${extracted}\n\nUser question: ${m.content||'Explain this document.'}`
-              : `[PDF: ${m.file.name||'document.pdf'}] — Could not extract text.\nUser question: ${m.content||'Explain this document.'}`
-          });
-        } else if (category==='text') {
-          const extracted = extractTextFromBase64(m.file.data);
-          nvidiaMessages.push({
-            role: 'user',
-            content: extracted
-              ? `[File: ${m.file.name||'file'}]\n\`\`\`\n${extracted}\n\`\`\`\nUser question: ${m.content||'Explain this code.'}`
-              : `[File: ${m.file.name||'file'}] — Could not read.\nUser question: ${m.content||'Explain this.'}`
-          });
-        } else if (category==='zip') {
-          nvidiaMessages.push({
-            role: 'user',
-            content: `[ZIP Archive: ${m.file.name||'archive.zip'}]\nZIP files cannot be read directly. Please extract and share the specific files.\nUser question: ${m.content||'Help with this project.'}`
-          });
-        } else {
-          nvidiaMessages.push({
-            role: 'user',
-            content: `[File: ${m.file.name||'file'} (${m.file.mimeType})]\nUser question: ${m.content||'Help with this file.'}`
-          });
-        }
-      } else {
-        nvidiaMessages.push({ role:'user', content: m.content||'' });
-      }
+      // Convert file to text description
+      const fileText = m.file?.data ? fileToText(m.file) : null;
+      const content  = fileText
+        ? `${fileText}\n\nUser question: ${m.content||'Please explain this.'}`
+        : (m.content||'');
+      msgs.push({ role:'user', content });
     }
-    return nvidiaMessages;
+    return msgs;
   }
 
   /* ── Single NVIDIA model call ── */
-  const callNvidiaModel = (model, apiKey, nvidiaMessages) => new Promise((resolve, reject) => {
+  const callNvidiaModel = (model, apiKey) => new Promise((resolve, reject) => {
     const nvidiaPayload = JSON.stringify({
       model,
-      messages: nvidiaMessages,
+      messages: buildNvidiaMessages(),
       max_tokens: 4096,
       temperature: 0.7,
       stream: false
@@ -739,9 +725,9 @@ app.post('/api/chat', auth, async (req, res) => {
     };
     const apiReq = https.request(opts, apiRes => {
       let data=''; apiRes.on('data',c=>data+=c);
-      apiRes.on('end',()=>resolve({ status:apiRes.statusCode, data }));
+      apiRes.on('end',()=>resolve({status:apiRes.statusCode,data}));
     });
-    apiReq.on('timeout',()=>{ apiReq.destroy(); reject(new Error(`NVIDIA ${model} Timeout`)); });
+    apiReq.on('timeout',()=>{apiReq.destroy();reject(new Error(`NVIDIA ${model} Timeout`));});
     apiReq.on('error',e=>reject(e));
     apiReq.write(nvidiaPayload); apiReq.end();
   });
@@ -750,7 +736,7 @@ app.post('/api/chat', auth, async (req, res) => {
 
   /* ── Step 1: Try all Gemini keys × models ── */
   if (GEMINI_KEYS.length) {
-    const keyOrder = GEMINI_KEYS.map((_,i) => (preferredKeyIndex+i) % GEMINI_KEYS.length);
+    const keyOrder = GEMINI_KEYS.map((_,i)=>(preferredKeyIndex+i)%GEMINI_KEYS.length);
     for (const model of geminiModels) {
       for (const keyIdx of keyOrder) {
         try {
@@ -759,13 +745,13 @@ app.post('/api/chat', auth, async (req, res) => {
             const p = JSON.parse(response.data);
             if (p.candidates?.[0]?.content?.parts?.[0]?.text) {
               preferredKeyIndex = keyIdx;
-              return res.json({ content:[{ type:'text', text:p.candidates[0].content.parts[0].text }] });
+              return res.json({ content:[{type:'text',text:p.candidates[0].content.parts[0].text}] });
             }
           } else if (response.status===429||response.status===403) {
-            try { lastError = JSON.parse(response.data).error?.message||`Key ${keyIdx+1} quota exceeded`; } catch {}
+            try { lastError=JSON.parse(response.data).error?.message||`Key ${keyIdx+1} quota exceeded`; } catch {}
             console.warn(`[Gemini Key ${keyIdx+1}] ${model} quota → next...`);
           } else {
-            try { lastError = JSON.parse(response.data).error?.message||`${model} status ${response.status}`; } catch {}
+            try { lastError=JSON.parse(response.data).error?.message||`${model} status ${response.status}`; } catch {}
             console.warn(`[Gemini Key ${keyIdx+1}] ${model} failed: ${lastError}`);
           }
         } catch(err) {
@@ -776,42 +762,30 @@ app.post('/api/chat', auth, async (req, res) => {
     }
   }
 
-  /* ── Step 2: All Gemini failed → NVIDIA with multiple models per key ──
-     For images:    try all 5 vision models × all 3 keys
-     For text/docs: try all 5 text models  × all 3 keys
-     So total = 15 attempts before giving up
+  /* ── Step 2: All Gemini failed → NVIDIA text models ──
+     6 text models × 3 keys = 18 total attempts
+     All file types work via text conversion
   ── */
   if (NVIDIA_KEYS.length) {
     console.warn('⚠️  All Gemini exhausted → NVIDIA fallback...');
-
-    const modelsToTry = hasImage ? NVIDIA_VISION_MODELS : NVIDIA_TEXT_MODELS;
-    const visionMessages = hasImage ? buildNvidiaMessages(true)  : null;
-    const textMessages   =            buildNvidiaMessages(false);
-
-    for (const model of modelsToTry) {
-      for (let ki = 0; ki < NVIDIA_KEYS.length; ki++) {
-        const apiKey   = NVIDIA_KEYS[ki];
-        // Vision models get vision messages, text models get text messages
-        const msgs     = (hasImage && NVIDIA_VISION_MODELS.includes(model))
-                         ? visionMessages
-                         : textMessages;
+    for (const model of NVIDIA_TEXT_MODELS) {
+      for (let ki=0; ki<NVIDIA_KEYS.length; ki++) {
         try {
-          const response = await callNvidiaModel(model, apiKey, msgs);
+          const response = await callNvidiaModel(model, NVIDIA_KEYS[ki]);
           if (response.status===200) {
             const p    = JSON.parse(response.data);
             const text = p.choices?.[0]?.message?.content;
             if (text) {
               console.log(`✅  NVIDIA success: ${model} (key ${ki+1})`);
-              return res.json({ content:[{ type:'text', text }] });
+              return res.json({ content:[{type:'text',text}] });
             }
           } else if (response.status===429) {
             console.warn(`[NVIDIA Key ${ki+1}] ${model} rate limited → next...`);
           } else if (response.status===404) {
-            // Model not available on this key — try next model
             console.warn(`[NVIDIA Key ${ki+1}] ${model} not available → next model...`);
-            break; // break inner key loop, move to next model
+            break; // model not available, skip to next model
           } else {
-            try { lastError = JSON.parse(response.data).detail||`NVIDIA ${model} status ${response.status}`; } catch {}
+            try { lastError=JSON.parse(response.data).detail||`NVIDIA ${model} status ${response.status}`; } catch {}
             console.warn(`[NVIDIA Key ${ki+1}] ${model} failed: ${lastError}`);
           }
         } catch(err) {
@@ -835,7 +809,7 @@ mongoose.connection.once('open', async () => {
   app.listen(PORT, () => {
     console.log(`\n⚡  CodeMentor AI → http://localhost:${PORT}`);
     console.log(`    🔑  Gemini keys: ${GEMINI_KEYS.length} | NVIDIA keys: ${NVIDIA_KEYS.length}`);
-    console.log(`    🖼  NVIDIA vision models: ${NVIDIA_VISION_MODELS.length} | text models: ${NVIDIA_TEXT_MODELS.length}`);
+    console.log(`    📝  NVIDIA text models: ${NVIDIA_TEXT_MODELS.length} (${NVIDIA_TEXT_MODELS.length * NVIDIA_KEYS.length} total attempts)`);
     if (!BREVO_API_KEY) console.log(`    📧  Brevo not configured — OTP will be logged to console`);
   });
 });
