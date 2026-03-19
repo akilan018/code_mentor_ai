@@ -138,6 +138,57 @@ function isGlobalAdmin(userId) {
 }
 
 /* ───────────────────────────────────────
+   NVIDIA FILE HELPERS
+─────────────────────────────────────── */
+const IMAGE_TYPES = ['image/png','image/jpeg','image/jpg','image/webp','image/gif','image/bmp'];
+const TEXT_TYPES  = [
+  'text/plain','text/markdown','text/csv','text/html','text/css',
+  'application/json','application/xml','application/javascript',
+  'application/typescript'
+];
+const TEXT_EXTENSIONS = [
+  '.txt','.md','.csv','.js','.ts','.py','.java','.cpp','.c','.h',
+  '.html','.css','.json','.xml','.yaml','.yml','.sql','.sh','.rb',
+  '.go','.rs','.php','.swift','.kt','.r','.scala'
+];
+
+function getFileCategory(mimeType, fileName) {
+  if (IMAGE_TYPES.includes(mimeType)) return 'image';
+  if (mimeType === 'application/pdf')  return 'pdf';
+  if (mimeType === 'application/zip' || mimeType === 'application/x-zip-compressed') return 'zip';
+  if (TEXT_TYPES.includes(mimeType))   return 'text';
+  const ext = path.extname(fileName || '').toLowerCase();
+  if (TEXT_EXTENSIONS.includes(ext))   return 'text';
+  return 'binary';
+}
+
+function extractTextFromBase64(base64Data) {
+  try {
+    const buf  = Buffer.from(base64Data, 'base64');
+    const text = buf.toString('utf-8');
+    const nullCount = (text.match(/\0/g) || []).length;
+    if (nullCount > text.length * 0.1) return null;
+    return text.slice(0, 15000);
+  } catch { return null; }
+}
+
+function extractPdfText(base64Data) {
+  try {
+    const buf  = Buffer.from(base64Data, 'base64');
+    const raw  = buf.toString('latin1');
+    const matches = [];
+    const regex = /BT[\s\S]*?ET/g;
+    let match;
+    while ((match = regex.exec(raw)) !== null) {
+      const strMatches = match[0].match(/\(([^)]+)\)/g);
+      if (strMatches) matches.push(strMatches.map(s => s.slice(1,-1)).join(' '));
+    }
+    const extracted = matches.join('\n').trim();
+    return extracted.length > 50 ? extracted.slice(0, 12000) : null;
+  } catch { return null; }
+}
+
+/* ───────────────────────────────────────
    BREVO EMAIL
 ─────────────────────────────────────── */
 async function sendEmailOTP(to, otp, purpose) {
@@ -209,8 +260,8 @@ function storeOTP(key, otp, extra = {}) {
 
 function checkOTP(key, otp) {
   const r = otpStore.get(key);
-  if (!r)                          return 'No OTP found. Please request again.';
-  if (Date.now() > r.expires)     { otpStore.delete(key); return 'OTP expired. Please request a new one.'; }
+  if (!r)                           return 'No OTP found. Please request again.';
+  if (Date.now() > r.expires)      { otpStore.delete(key); return 'OTP expired. Please request a new one.'; }
   if (r.otp !== String(otp).trim()) return 'Incorrect OTP. Please try again.';
   const data = { ...r }; otpStore.delete(key); return { ok: true, data };
 }
@@ -219,8 +270,8 @@ function checkOTP(key, otp) {
    MIDDLEWARE
 ─────────────────────────────────────── */
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: '4mb' }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.json({ limit: '20mb' }));
+app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 
 app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -316,7 +367,7 @@ app.post('/api/auth/register/verify-otp', authLimiter, async (req, res) => {
   const existing = await User.findOne({ userId: key });
   if (existing) return res.status(400).json({ error: 'This User ID was just taken. Please choose another.' });
 
-  const hashed = await bcrypt.hash(pending.password, 10);
+  const hashed  = await bcrypt.hash(pending.password, 10);
   const secHash = await bcrypt.hash((pending.securityAnswer || '').toLowerCase().trim(), 10);
 
   const user = await User.create({
@@ -382,11 +433,11 @@ app.post('/api/auth/forgot/verify-otp', forgotLimiter, async (req, res) => {
   const { userId, otp } = req.body;
   if (!userId || !otp) return res.status(400).json({ error: 'User ID and OTP are required.' });
 
-  const key   = `fpw_${userId.toLowerCase().trim()}`;
+  const key    = `fpw_${userId.toLowerCase().trim()}`;
   const stored = otpStore.get(key);
   if (!stored)                      return res.status(400).json({ error: 'No OTP found. Please request a new one.' });
   if (Date.now() > stored.expires) { otpStore.delete(key); return res.status(400).json({ error: 'OTP expired. Please request a new one.' }); }
-  if (stored.otp !== String(otp).trim())  return res.status(400).json({ error: 'Incorrect OTP. Please try again.' });
+  if (stored.otp !== String(otp).trim()) return res.status(400).json({ error: 'Incorrect OTP. Please try again.' });
   otpStore.delete(key);
 
   const token = uuidv4();
@@ -404,7 +455,7 @@ app.post('/api/auth/forgot/reset', forgotLimiter, async (req, res) => {
   const pwErr = validatePassword(newPassword);
   if (pwErr) return res.status(400).json({ error: pwErr });
 
-  const key = `reset_${userId.toLowerCase()}`;
+  const key    = `reset_${userId.toLowerCase()}`;
   const stored = otpStore.get(key);
   if (!stored || stored.token !== token || Date.now() > stored.expires)
     return res.status(400).json({ error: 'Reset session expired. Please start again.' });
@@ -426,8 +477,6 @@ app.post('/api/auth/forgot/reset', forgotLimiter, async (req, res) => {
 /* ───────────────────────────────────────
    SETTINGS — Update name, userId, password
 ─────────────────────────────────────── */
-
-/* Update name */
 app.post('/api/auth/settings/update-name', auth, async (req, res) => {
   const { name } = req.body;
   if (!name || name.trim().length < 2)
@@ -442,7 +491,6 @@ app.post('/api/auth/settings/update-name', auth, async (req, res) => {
   res.json({ success: true, message: 'Name updated successfully.', user: safe(user) });
 });
 
-/* Update userId */
 app.post('/api/auth/settings/update-userid', auth, async (req, res) => {
   const { newUserId, currentPassword } = req.body;
 
@@ -473,7 +521,6 @@ app.post('/api/auth/settings/update-userid', auth, async (req, res) => {
   res.json({ success: true, message: 'User ID updated successfully.', user: safe(user) });
 });
 
-/* Change password (logged-in) */
 app.post('/api/auth/change-password', auth, async (req, res) => {
   const { currentPassword, securityAnswer, newPassword, confirmPassword } = req.body;
 
@@ -595,46 +642,37 @@ app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req, res)
   res.send(JSON.stringify(data, null, 2));
 });
 
-/* Role change — global admin is protected */
 app.put('/api/admin/users/:uid/role', auth, admin, async (req, res) => {
   const { role } = req.body;
   if (!['admin', 'user'].includes(role)) return res.status(400).json({ error: 'Invalid role.' });
-
   const targetUid = req.params.uid.toLowerCase();
-
   if (isGlobalAdmin(targetUid))
     return res.status(403).json({ error: 'The global admin role cannot be changed by any admin.' });
-
   const u = await User.findOne({ userId: targetUid });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-
   if (u.userId === req.session.user.userId)
     return res.status(400).json({ error: 'Cannot change your own role.' });
-
   u.role = role; await u.save();
   res.json({ success: true });
 });
 
-/* Delete — global admin is protected */
 app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   const targetUid = req.params.uid.toLowerCase();
-
   if (isGlobalAdmin(targetUid))
     return res.status(403).json({ error: 'The global admin account cannot be deleted.' });
-
   const u = await User.findOne({ userId: targetUid });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-
   if (u.userId === req.session.user.userId)
     return res.status(400).json({ error: 'You cannot delete your own account.' });
-
   await Chat.deleteMany({ ownerId: u.id });
   await User.deleteOne({ userId: u.userId });
   res.json({ success: true });
 });
 
 /* ───────────────────────────────────────
-   CHAT — Gemini first, NVIDIA fallback
+   CHAT — Gemini first → NVIDIA fallback
+   NVIDIA uses SAME system prompt as Gemini
+   so output format is identical
 ─────────────────────────────────────── */
 let preferredKeyIndex = 0;
 
@@ -645,6 +683,7 @@ app.post('/api/chat', auth, async (req, res) => {
   const { system, messages } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
 
+  /* ── Gemini payload ── */
   const contents = messages.map(m => {
     const parts = [];
     if (m.file && m.file.data && m.file.mimeType) {
@@ -654,17 +693,17 @@ app.post('/api/chat', auth, async (req, res) => {
     return { role: m.role === 'assistant' ? 'model' : 'user', parts };
   });
 
-  const payload = JSON.stringify({
+  const geminiPayload = JSON.stringify({
     system_instruction: { parts: [{ text: system || '' }] },
     contents,
     generationConfig: { maxOutputTokens: 8192, temperature: 0.7 }
   });
 
-  const hasImage = messages.some(m => m.file && m.file.data);
+  const hasFile     = messages.some(m => m.file && m.file.data);
   const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
   const queryLen    = (lastUserMsg?.content || '').length;
-  const isSimple    = !hasImage && queryLen < 300;
-  const requestTimeout = hasImage ? 120000 : (isSimple ? 25000 : 70000);
+  const isSimple    = !hasFile && queryLen < 300;
+  const requestTimeout = hasFile ? 120000 : (isSimple ? 25000 : 70000);
 
   const modelsToTry = [
     'gemini-2.0-flash',
@@ -681,7 +720,7 @@ app.post('/api/chat', auth, async (req, res) => {
       hostname: 'generativelanguage.googleapis.com',
       path: `/v1beta/models/${model}:generateContent?key=${apiKey}`,
       method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload) },
+      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(geminiPayload) },
       timeout: requestTimeout
     };
     const apiReq = https.request(opts, apiRes => {
@@ -691,27 +730,99 @@ app.post('/api/chat', auth, async (req, res) => {
     });
     apiReq.on('timeout', () => { apiReq.destroy(); reject(new Error('Timeout')); });
     apiReq.on('error', e => reject(e));
-    apiReq.write(payload); apiReq.end();
+    apiReq.write(geminiPayload); apiReq.end();
   });
 
-  /* ── NVIDIA call (text-only fallback) ── */
+  /* ── NVIDIA call ──
+     Uses the SAME system prompt as Gemini
+     so the HTML output format is identical.
+     Smart file handling per type.
+  ── */
   const callNvidia = (apiKey) => new Promise((resolve, reject) => {
+    const hasImage = messages.some(m => m.file && IMAGE_TYPES.includes(m.file?.mimeType));
+
+    // Build NVIDIA messages — same system prompt forces same HTML output
     const nvidiaMessages = [
-      { role: 'system', content: system || '' },
-      ...messages.map(m => ({
-        role: m.role === 'assistant' ? 'assistant' : 'user',
-        content: m.file
-          ? `[User attached a file: ${m.file.name || 'file'}. Describe and explain it as best you can.]\n\n${m.content}`
-          : m.content
-      }))
+      {
+        role: 'system',
+        // Pass the FULL system prompt — this makes NVIDIA output same HTML format as Gemini
+        content: (system || '') + '\n\nCRITICAL: You MUST respond in pure HTML exactly as instructed above. No markdown. No plain text. Pure HTML only.'
+      }
     ];
+
+    for (const m of messages) {
+      if (m.role === 'assistant') {
+        nvidiaMessages.push({ role: 'assistant', content: m.content || '' });
+        continue;
+      }
+
+      // User message with file
+      if (m.file && m.file.data && m.file.mimeType) {
+        const category = getFileCategory(m.file.mimeType, m.file.name);
+
+        if (category === 'image') {
+          // Qwen2-VL: send as image_url — model actually sees the image
+          nvidiaMessages.push({
+            role: 'user',
+            content: [
+              {
+                type: 'image_url',
+                image_url: { url: `data:${m.file.mimeType};base64,${m.file.data}` }
+              },
+              { type: 'text', text: m.content || 'Please explain this image in detail.' }
+            ]
+          });
+
+        } else if (category === 'pdf') {
+          const extracted = extractPdfText(m.file.data);
+          const fileContent = extracted
+            ? `[PDF: ${m.file.name || 'document.pdf'}]\n\nExtracted Text:\n${extracted}`
+            : `[PDF: ${m.file.name || 'document.pdf'}]\n\nCould not extract text automatically.`;
+          nvidiaMessages.push({
+            role: 'user',
+            content: `${fileContent}\n\nUser question: ${m.content || 'Explain this document.'}`
+          });
+
+        } else if (category === 'text') {
+          const extracted = extractTextFromBase64(m.file.data);
+          const fileContent = extracted
+            ? `[File: ${m.file.name || 'file'}]\n\nContents:\n\`\`\`\n${extracted}\n\`\`\``
+            : `[File: ${m.file.name || 'file'}]\n\nCould not read file contents.`;
+          nvidiaMessages.push({
+            role: 'user',
+            content: `${fileContent}\n\nUser question: ${m.content || 'Explain this code.'}`
+          });
+
+        } else if (category === 'zip') {
+          nvidiaMessages.push({
+            role: 'user',
+            content: `[ZIP Archive: ${m.file.name || 'archive.zip'}]\n\nZIP files cannot be read directly. Please extract and share the specific files you need help with.\n\nUser question: ${m.content || 'Help with this project.'}`
+          });
+
+        } else {
+          nvidiaMessages.push({
+            role: 'user',
+            content: `[File: ${m.file.name || 'file'} — ${m.file.mimeType}]\n\nUser question: ${m.content || 'Help with this file.'}`
+          });
+        }
+      } else {
+        nvidiaMessages.push({ role: 'user', content: m.content || '' });
+      }
+    }
+
+    // Vision model for images, fast text model for everything else
+    const nvidiaModel = hasImage
+      ? 'qwen/qwen2-vl-7b-instruct'
+      : 'meta/llama-3.1-70b-instruct';
+
     const nvidiaPayload = JSON.stringify({
-      model: 'meta/llama-3.1-70b-instruct',
+      model: nvidiaModel,
       messages: nvidiaMessages,
       max_tokens: 4096,
       temperature: 0.7,
       stream: false
     });
+
     const opts = {
       hostname: 'integrate.api.nvidia.com',
       path: '/v1/chat/completions',
@@ -723,6 +834,7 @@ app.post('/api/chat', auth, async (req, res) => {
       },
       timeout: requestTimeout
     };
+
     const apiReq = https.request(opts, apiRes => {
       let data = '';
       apiRes.on('data', c => data += c);
@@ -771,7 +883,7 @@ app.post('/api/chat', auth, async (req, res) => {
       try {
         const response = await callNvidia(NVIDIA_KEYS[i]);
         if (response.status === 200) {
-          const p = JSON.parse(response.data);
+          const p    = JSON.parse(response.data);
           const text = p.choices?.[0]?.message?.content;
           if (text) {
             console.log('✅  NVIDIA fallback succeeded');
