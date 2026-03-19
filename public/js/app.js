@@ -102,13 +102,12 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 
 /* ── INIT ── */
 (async () => {
-  if (!sessionStorage.getItem('cm_activeSession')) {
-    sessionStorage.setItem('cm_activeSession', 'true');
-    await api('POST', '/api/auth/logout');
-  }
-  const res = await api('GET', '/api/auth/me');
+  const res = await api('GET', '/api/auth/me'); // just check session — no forced logout
   if (res.user) loginOk(res.user);
+  else document.getElementById('authModal').classList.add('open');
 })();
+
+
 
 /* ══════════════════════════════════════
 
@@ -539,7 +538,7 @@ function closePasswordModal() { closeSettingsModal(); }
    CHAT LIST
 ══════════════════════════════════════ */
 
-async function loadChatList() {
+async function loadChatList(silent = false) {
   const res   = await api('GET', '/api/chats');
   const list  = document.getElementById('chatList');
   const empty = document.getElementById('sbEmpty');
@@ -547,7 +546,7 @@ async function loadChatList() {
 
   if (!res.chats?.length) {
     empty.style.display = 'block';
-    if (!activeId) showWelcome();
+    if (!activeId && !silent) showWelcome();
     return;
   }
   empty.style.display = 'none';
@@ -572,9 +571,11 @@ async function loadChatList() {
   list.querySelectorAll('.chat-item').forEach(el =>
     el.classList.toggle('active', el.dataset.id === activeId)
   );
-  if (!activeId && res.chats.length) switchChat(res.chats[0].id);
-  else if (!activeId) showWelcome();
+
+  if (!activeId && !silent && res.chats.length) switchChat(res.chats[0].id);
+  else if (!activeId && !silent) showWelcome();
 }
+
 
 function buildChatItem(c) {
   const el = document.createElement('div');
@@ -618,10 +619,11 @@ async function newChat() {
   closeSidebar();
 }
 
+
 async function switchChat(id) {
   activeId = id;
-  const res = await api('GET', `/api/chats/${id}`); // Always fetch fresh — never rely on stale cache after login
-  const chatData = res.chat || res; // handle both { chat:{} } and direct object responses
+  const res = await api('GET', `/api/chats/${id}`);
+  const chatData = res.chat || res;
   cache[id] = { history: chatData.history || [], rendered: chatData.rendered || [] };
   const listRes = await api('GET', '/api/chats');
   const meta    = (listRes.chats || []).find(c => c.id === id);
@@ -635,6 +637,7 @@ async function switchChat(id) {
   closeSidebar();
 }
 
+
 async function deleteChat(id) {
   if (!confirm('Delete this chat?')) return;
   await api('DELETE', `/api/chats/${id}`);
@@ -642,6 +645,7 @@ async function deleteChat(id) {
   if (id === activeId) activeId = null;
   loadChatList();
 }
+
 
 function goHome() {
   activeId = null;
@@ -702,10 +706,8 @@ function quickAsk(t) { document.getElementById('msgInput').value = t; autoResize
 
 /* ══════════════════════════════════════
 
-
    SYSTEM PROMPT
 ══════════════════════════════════════ */
-
 
 const SYSTEM = `You are CodeMentor AI — a friendly coding teacher for beginners and students.
 Respond in PURE HTML ONLY. Zero markdown. Zero asterisks. Zero hash symbols. Zero backticks.
@@ -880,11 +882,9 @@ When a user uploads ANY file, you will receive its contents like [IMAGE UPLOADED
 - DO NOT output implemented code blocks unless the user explicitly types a written request like "Write the code for this" or "Fix and run this code".
 - NEVER write python/javascript code to try to open or process the raw file itself!`;
 
-
 /* ══════════════════════════════════════
    SERVICE UNAVAILABLE BANNER
 ══════════════════════════════════════ */
-
 
 function showServiceBanner() {
   // Remove any existing banner
@@ -995,7 +995,7 @@ async function sendMessage() {
     }
 
     renderMessage('ai', reply, true);
-    await loadChatList();
+    await loadChatList(true);
   } catch (e) {
     document.getElementById(tid)?.remove();
     showServiceBanner();
