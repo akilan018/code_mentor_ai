@@ -61,7 +61,7 @@ mongoose.connect(process.env.MONGODB_URI)
    SCHEMAS
 ─────────────────────────────────────── */
 const userSchema = new mongoose.Schema({
-  uid: { type: String, default: () => uuidv4(), unique: true },
+  id: { type: String, default: () => uuidv4() },
   userId: { type: String, required: true, unique: true, lowercase: true },
   name: { type: String, required: true },
   email: { type: String, default: '' },
@@ -74,17 +74,15 @@ const userSchema = new mongoose.Schema({
   securityAnswer: { type: String, default: '' },
   joined: { type: Number, default: Date.now },
   lastSeen: { type: Number, default: Date.now }
-});
-
-/* ── FIX: disable Mongoose auto virtual 'id' to avoid conflict with our uid ── */
-userSchema.set('toObject', { virtuals: false });
-userSchema.set('toJSON',   { virtuals: false });
+}, { id: false });
+/* ── { id: false } suppresses Mongoose's auto virtual 'id' getter
+      so our real schema field 'id' is never shadowed ── */
 
 const User = mongoose.model('User', userSchema);
 
 const chatSchema = new mongoose.Schema({
   chatId:  { type: String, default: () => uuidv4() },
-  ownerId: { type: String, required: true },   // stores user.uid
+  ownerId: { type: String, required: true },   // stores user.id
   title:   { type: String, default: 'New Chat' },
   ts:      { type: Number, default: Date.now },
   history:  { type: mongoose.Schema.Types.Mixed, default: [] },
@@ -97,6 +95,24 @@ const otpStore = new Map();
 /* ───────────────────────────────────────
    SEED ADMIN
 ─────────────────────────────────────── */
+async function migrateUserIds() {
+  /* One-time migration: backfill any user documents that are missing the 'id' field.
+     This fixes all existing users created before the id field was explicit. */
+  try {
+    const usersWithoutId = await User.find({ id: { $in: [null, '', undefined] } });
+    for (const u of usersWithoutId) {
+      u.id = uuidv4();
+      await u.save();
+      console.log(`🔧  Migrated user '${u.userId}' → id: ${u.id}`);
+    }
+    if (usersWithoutId.length === 0) {
+      console.log('✅  All users have id field — no migration needed');
+    } else {
+      console.log(`✅  Migrated ${usersWithoutId.length} user(s) successfully`);
+    }
+  } catch (e) { console.error('Migration error:', e.message); }
+}
+
 async function seedAdmin() {
   try {
     const adminPwd = process.env.ADMIN_PASSWORD;
@@ -106,7 +122,7 @@ async function seedAdmin() {
       const password = adminPwd || 'Admin@123!';
       const hashed   = await bcrypt.hash(password, 10);
       await User.create({
-        uid: uuidv4(), userId: GLOBAL_ADMIN_ID, name: 'Admin',
+        id: uuidv4(), userId: GLOBAL_ADMIN_ID, name: 'Admin',
         email: 'admin@codementor.ai', phone: '',
         password: hashed, passwordHistory: [hashed],
         role: 'admin', verified: true, method: 'email',
@@ -129,14 +145,11 @@ async function seedAdmin() {
    HELPERS
 ─────────────────────────────────────── */
 
-/* ── FIX: safe() now always uses uid (not Mongoose virtual id) ── */
 const safe = u => {
   const o = u.toObject ? u.toObject() : { ...u };
   delete o.password;
   delete o.passwordHistory;
   delete o.securityAnswer;
-  /* expose uid as the stable identity key used for ownerId lookups */
-  o.id = o.uid;
   return o;
 };
 
@@ -453,7 +466,7 @@ app.post('/api/auth/register/verify-otp', authLimiter, async (req, res) => {
   const secHash = await bcrypt.hash((pending.securityAnswer || '').toLowerCase().trim(), 10);
 
   const user = await User.create({
-    uid: uuidv4(), userId: key, name: pending.name,
+    id: uuidv4(), userId: key, name: pending.name,
     email: pending.method === 'email' ? pending.contact : '',
     phone: pending.method === 'phone' ? pending.contact : '',
     password: hashed, passwordHistory: [hashed],
@@ -678,9 +691,9 @@ app.delete('/api/chats/:id', auth, async (req, res) => {
 app.get('/api/admin/users', auth, admin, async (req, res) => {
   const users    = await User.find({}, { password: 0, passwordHistory: 0, securityAnswer: 0 });
   const enriched = await Promise.all(users.map(async u => {
-    const chats    = await Chat.find({ ownerId: u.uid });
+    const chats    = await Chat.find({ ownerId: u.id });
     const msgCount = chats.reduce((n, c) => n + Math.floor((c.history?.length || 0) / 2), 0);
-    return { ...u.toObject(), id: u.uid, chatCount: chats.length, msgCount };
+    return { ...u.toObject(), chatCount: chats.length, msgCount };
   }));
   res.json({ users: enriched });
 });
@@ -688,7 +701,7 @@ app.get('/api/admin/users', auth, admin, async (req, res) => {
 app.get('/api/admin/users/:uid/messages', auth, admin, async (req, res) => {
   const user = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!user) return res.status(404).json({ error: 'User not found.' });
-  const chats = await Chat.find({ ownerId: user.uid });
+  const chats = await Chat.find({ ownerId: user.id });
   const data  = chats.map(c => ({
     chatId: c.chatId, title: c.title, ts: c.ts,
     messages: (c.history || []).map(m => ({
@@ -702,7 +715,7 @@ app.get('/api/admin/users/:uid/messages', auth, admin, async (req, res) => {
 app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req, res) => {
   const user = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!user) return res.status(404).json({ error: 'User not found.' });
-  const chats = await Chat.find({ ownerId: user.uid });
+  const chats = await Chat.find({ ownerId: user.id });
   const data  = {
     exportedAt: new Date().toISOString(),
     user: { userId: user.userId, name: user.name, email: user.email },
@@ -748,7 +761,7 @@ app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   if (u.userId === req.session.user.userId)
     return res.status(400).json({ error: 'You cannot delete your own account.' });
 
-  await Chat.deleteMany({ ownerId: u.uid });
+  await Chat.deleteMany({ ownerId: u.id });
   await User.deleteOne({ userId: u.userId });
   res.json({ success: true });
 });
@@ -925,6 +938,7 @@ app.get('*', (_, res) => res.sendFile(path.join(__dirname, 'public', 'index.html
    START
 ─────────────────────────────────────── */
 mongoose.connection.once('open', async () => {
+  await migrateUserIds();  // backfill id for existing users
   await seedAdmin();
   app.listen(PORT, () => {
     console.log(`\n⚡  CodeMentor AI → http://localhost:${PORT}`);
