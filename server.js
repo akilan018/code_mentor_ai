@@ -172,7 +172,6 @@ function getFileCategory(mimeType, fileName) {
   if (mimeType === 'application/zip' || mimeType === 'application/x-zip-compressed') return 'zip';
   if (TEXT_TYPES.includes(mimeType))   return 'text';
   const ext = path.extname(fileName || '').toLowerCase();
-  
   if (ext === '.docx') return 'docx';
   if (ext === '.doc') return 'doc';
   if (TEXT_EXTENSIONS.includes(ext))   return 'text';
@@ -201,7 +200,7 @@ async function fileToText(file) {
       const { data: { text } } = await Tesseract.recognize(buf, 'eng', { logger: () => {} });
       const cleaned = text.trim() ? text.trim().slice(0, 15000) : '';
       if (!cleaned) {
-         return `[IMAGE UPLOADED: ${file.name || 'image'}]\nImage was scanned but no readable text was found. Describe the image to help the AI.`;
+        return `[IMAGE UPLOADED: ${file.name || 'image'}]\nImage was scanned but no readable text was found. Describe the image to help the AI.`;
       }
       return `[IMAGE UPLOADED: ${file.name || 'image'}]\nExtracted Content via OCR:\n${cleaned}\n\nNote: Please use this extracted text to answer the user's question accurately.`;
     } catch(e) {
@@ -260,7 +259,6 @@ Please extract specific files and share the code you need help with.`;
    BREVO EMAIL
 ─────────────────────────────────────── */
 async function sendEmailOTP(to, otp, purpose) {
-  // Log OTP to console always (for dev/debugging)
   console.log(`\n📧  Email OTP for ${to} → ${otp}\n`);
 
   if (!BREVO_API_KEY || !BREVO_FROM_EMAIL) {
@@ -339,8 +337,9 @@ function checkOTP(key, otp) {
    MIDDLEWARE
 ─────────────────────────────────────── */
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.json({ limit: '4mb' }));
-app.use(express.urlencoded({ extended: true }));
+/* ✅ FIXED: increased from 4mb to 50mb to handle large image uploads */
+app.use(express.json({ limit: '50mb' }));
+app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
 app.use((req, res, next) => {
   res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
@@ -735,7 +734,7 @@ app.put('/api/admin/users/:uid/role', auth, admin, async (req, res) => {
   res.json({ success: true });
 });
 
-/* Delete — global admin is protected, and admins can delete other admins (except global) */
+/* Delete — global admin is protected */
 app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   const targetUid = req.params.uid.toLowerCase();
 
@@ -756,7 +755,7 @@ app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
 /* ───────────────────────────────────────
    CHAT — Gemini key hierarchy (3 keys)
 ─────────────────────────────────────── */
-let preferredKeyIndex = 0; // Index into GEMINI_KEYS that worked last
+let preferredKeyIndex = 0;
 
 app.post('/api/chat', auth, async (req, res) => {
   if (!GEMINI_KEYS.length && !NVIDIA_KEYS.length) return res.status(500).json({ error: 'No API keys set in environment.' });
@@ -780,13 +779,11 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   const hasImage = messages.some(m => m.file && m.file.data);
-  // Estimate complexity: short query = fast timeout; long/image = longer timeout
   const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
   const queryLen = (lastUserMsg?.content || '').length;
   const isSimple = !hasImage && queryLen < 300;
   const requestTimeout = hasImage ? 120000 : (isSimple ? 45000 : 90000);
 
-  // Use only models explicitly provisioned on this exclusive API key
   const modelsToTry = [
     'gemini-2.0-flash',
     'gemini-2.0-flash-lite',
@@ -878,7 +875,7 @@ app.post('/api/chat', auth, async (req, res) => {
           if (response.status === 200) {
             const p = JSON.parse(response.data);
             if (p.candidates?.[0]?.content?.parts?.[0]?.text) {
-              preferredKeyIndex = keyIdx; // Cache winning key
+              preferredKeyIndex = keyIdx;
               return res.json({ content: [{ type: 'text', text: p.candidates[0].content.parts[0].text }] });
             }
           } else if (response.status === 429 || response.status === 403) {
@@ -905,7 +902,7 @@ app.post('/api/chat', auth, async (req, res) => {
       for (let ki=0; ki<NVIDIA_KEYS.length; ki++) {
         try {
           if (!nvidiaMsgs) {
-            nvidiaMsgs = await buildNvidiaMessages(); // Process files once lazily 
+            nvidiaMsgs = await buildNvidiaMessages();
           }
           const response = await callNvidiaModel(model, NVIDIA_KEYS[ki], nvidiaMsgs);
           if (response.status===200) {
@@ -919,7 +916,7 @@ app.post('/api/chat', auth, async (req, res) => {
             console.warn(`[NVIDIA Key ${ki+1}] ${model} rate limited → next...`);
           } else if (response.status===404) {
             console.warn(`[NVIDIA Key ${ki+1}] ${model} not available → next model...`);
-            break; 
+            break;
           } else {
             try { lastError=JSON.parse(response.data).detail||`NVIDIA ${model} status ${response.status}`; } catch {}
             console.warn(`[NVIDIA Key ${ki+1}] ${model} failed: ${lastError}`);
