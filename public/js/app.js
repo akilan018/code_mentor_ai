@@ -108,7 +108,6 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 })();
 
 
-
 /* ══════════════════════════════════════
 
    AUTH TABS
@@ -576,7 +575,6 @@ async function loadChatList(silent = false) {
   else if (!activeId && !silent) showWelcome();
 }
 
-
 function buildChatItem(c) {
   const el = document.createElement('div');
   el.className = 'chat-item' + (c.id === activeId ? ' active' : '');
@@ -619,7 +617,6 @@ async function newChat() {
   closeSidebar();
 }
 
-
 async function switchChat(id) {
   activeId = id;
   const res = await api('GET', `/api/chats/${id}`);
@@ -637,7 +634,6 @@ async function switchChat(id) {
   closeSidebar();
 }
 
-
 async function deleteChat(id) {
   if (!confirm('Delete this chat?')) return;
   await api('DELETE', `/api/chats/${id}`);
@@ -645,7 +641,6 @@ async function deleteChat(id) {
   if (id === activeId) activeId = null;
   loadChatList();
 }
-
 
 function goHome() {
   activeId = null;
@@ -981,18 +976,23 @@ async function sendMessage() {
     cd.history.push({ role: 'assistant', content: reply });
     cd.rendered.push({ role: 'ai', content: reply, isHTML: true });
 
-    const listRes  = await api('GET', '/api/chats');
-    const meta     = (listRes.chats || []).find(c => c.id === activeId);
+    // Save history + rendered to server so chat survives page reload / chat switch
+    const savePayload = { history: cd.history, rendered: cd.rendered };
 
-    // Auto-rename chat if it is still named 'New Chat'
+    // Auto-rename if still 'New Chat'
+    const listRes = await api('GET', '/api/chats');
+    const meta    = (listRes.chats || []).find(c => c.id === activeId);
     if (meta?.title === 'New Chat') {
       let newTitle = text.slice(0, 40) + (text.length > 40 ? '…' : '');
       if (!newTitle && currentFile) newTitle = `📎 ${currentFile.name.split('.')[0]}`;
       if (newTitle) {
-        await api('PUT', `/api/chats/${activeId}`, { title: newTitle });
+        savePayload.title = newTitle;
         document.getElementById('chatTitleDisplay').textContent = newTitle;
       }
     }
+
+    // Single PUT saves history, rendered, and title together
+    await api('PUT', `/api/chats/${activeId}`, savePayload);
 
     renderMessage('ai', reply, true);
     await loadChatList(true);
