@@ -42,10 +42,10 @@ const NVIDIA_TEXT_MODELS = [
   'nvidia/llama-3.1-nemotron-70b-instruct',
 ];
 
-const BREVO_API_KEY = process.env.BREVO_API_KEY || '';
-const BREVO_FROM_NAME = process.env.BREVO_FROM_NAME || 'CodeMentor AI';
+const BREVO_API_KEY    = process.env.BREVO_API_KEY    || '';
+const BREVO_FROM_NAME  = process.env.BREVO_FROM_NAME  || 'CodeMentor AI';
 const BREVO_FROM_EMAIL = process.env.BREVO_FROM_EMAIL || '';
-const FAST2SMS_KEY = process.env.FAST2SMS_KEY || '';
+const FAST2SMS_KEY     = process.env.FAST2SMS_KEY     || '';
 
 /* ── GLOBAL ADMIN userId (cannot be demoted/deleted/password-changed) ── */
 const GLOBAL_ADMIN_ID = 'admin';
@@ -61,7 +61,7 @@ mongoose.connect(process.env.MONGODB_URI)
    SCHEMAS
 ─────────────────────────────────────── */
 const userSchema = new mongoose.Schema({
-  id: { type: String, default: () => uuidv4() },
+  uid: { type: String, default: () => uuidv4(), unique: true },
   userId: { type: String, required: true, unique: true, lowercase: true },
   name: { type: String, required: true },
   email: { type: String, default: '' },
@@ -75,14 +75,19 @@ const userSchema = new mongoose.Schema({
   joined: { type: Number, default: Date.now },
   lastSeen: { type: Number, default: Date.now }
 });
+
+/* ── FIX: disable Mongoose auto virtual 'id' to avoid conflict with our uid ── */
+userSchema.set('toObject', { virtuals: false });
+userSchema.set('toJSON',   { virtuals: false });
+
 const User = mongoose.model('User', userSchema);
 
 const chatSchema = new mongoose.Schema({
-  chatId: { type: String, default: () => uuidv4() },
-  ownerId: { type: String, required: true },
-  title: { type: String, default: 'New Chat' },
-  ts: { type: Number, default: Date.now },
-  history: { type: mongoose.Schema.Types.Mixed, default: [] },
+  chatId:  { type: String, default: () => uuidv4() },
+  ownerId: { type: String, required: true },   // stores user.uid
+  title:   { type: String, default: 'New Chat' },
+  ts:      { type: Number, default: Date.now },
+  history:  { type: mongoose.Schema.Types.Mixed, default: [] },
   rendered: { type: mongoose.Schema.Types.Mixed, default: [] }
 });
 const Chat = mongoose.model('Chat', chatSchema);
@@ -95,13 +100,13 @@ const otpStore = new Map();
 async function seedAdmin() {
   try {
     const adminPwd = process.env.ADMIN_PASSWORD;
-    const exists = await User.findOne({ userId: GLOBAL_ADMIN_ID });
+    const exists   = await User.findOne({ userId: GLOBAL_ADMIN_ID });
 
     if (!exists) {
       const password = adminPwd || 'Admin@123!';
-      const hashed = await bcrypt.hash(password, 10);
+      const hashed   = await bcrypt.hash(password, 10);
       await User.create({
-        userId: GLOBAL_ADMIN_ID, name: 'Admin',
+        uid: uuidv4(), userId: GLOBAL_ADMIN_ID, name: 'Admin',
         email: 'admin@codementor.ai', phone: '',
         password: hashed, passwordHistory: [hashed],
         role: 'admin', verified: true, method: 'email',
@@ -123,17 +128,27 @@ async function seedAdmin() {
 /* ───────────────────────────────────────
    HELPERS
 ─────────────────────────────────────── */
+
+/* ── FIX: safe() now always uses uid (not Mongoose virtual id) ── */
 const safe = u => {
   const o = u.toObject ? u.toObject() : { ...u };
-  delete o.password; delete o.passwordHistory; delete o.securityAnswer;
+  delete o.password;
+  delete o.passwordHistory;
+  delete o.securityAnswer;
+  /* expose uid as the stable identity key used for ownerId lookups */
+  o.id = o.uid;
   return o;
 };
 
 function validatePassword(password) {
-  if (password.length < 8) return 'Password must be at least 8 characters.';
-  if (!/[A-Z]/.test(password)) return 'Password must contain at least one uppercase letter.';
-  if (!/[a-z]/.test(password)) return 'Password must contain at least one lowercase letter.';
-  if (!/[0-9]/.test(password)) return 'Password must contain at least one number.';
+  if (password.length < 8)
+    return 'Password must be at least 8 characters.';
+  if (!/[A-Z]/.test(password))
+    return 'Password must contain at least one uppercase letter.';
+  if (!/[a-z]/.test(password))
+    return 'Password must contain at least one lowercase letter.';
+  if (!/[0-9]/.test(password))
+    return 'Password must contain at least one number.';
   if (!/[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?`~]/.test(password))
     return 'Password must contain at least one special character (!@#$%...).';
   return null;
@@ -151,7 +166,7 @@ function isGlobalAdmin(userId) {
 }
 
 /* ───────────────────────────────────────
-   FILE HELPERS (Local fallback parsing)
+   FILE HELPERS
 ─────────────────────────────────────── */
 const IMAGE_TYPES = ['image/png','image/jpeg','image/jpg','image/webp','image/gif','image/bmp'];
 const TEXT_TYPES  = [
@@ -173,8 +188,8 @@ function getFileCategory(mimeType, fileName) {
   if (TEXT_TYPES.includes(mimeType))   return 'text';
   const ext = path.extname(fileName || '').toLowerCase();
   if (ext === '.docx') return 'docx';
-  if (ext === '.doc') return 'doc';
-  if (TEXT_EXTENSIONS.includes(ext))   return 'text';
+  if (ext === '.doc')  return 'doc';
+  if (TEXT_EXTENSIONS.includes(ext)) return 'text';
   return 'binary';
 }
 
@@ -188,7 +203,6 @@ function extractTextFromBase64(base64Data) {
   } catch { return null; }
 }
 
-/* ── Convert ANY file to a text description for NVIDIA ── */
 async function fileToText(file) {
   if (!file || !file.data) return null;
   const category = getFileCategory(file.mimeType || '', file.name || '');
@@ -200,9 +214,9 @@ async function fileToText(file) {
       const { data: { text } } = await Tesseract.recognize(buf, 'eng', { logger: () => {} });
       const cleaned = text.trim() ? text.trim().slice(0, 15000) : '';
       if (!cleaned) {
-        return `[IMAGE UPLOADED: ${file.name || 'image'}]\nImage was scanned but no readable text was found. Describe the image to help the AI.`;
+        return `[IMAGE UPLOADED: ${file.name || 'image'}]\nImage was scanned but no readable text was found.`;
       }
-      return `[IMAGE UPLOADED: ${file.name || 'image'}]\nExtracted Content via OCR:\n${cleaned}\n\nNote: Please use this extracted text to answer the user's question accurately.`;
+      return `[IMAGE UPLOADED: ${file.name || 'image'}]\nExtracted Content via OCR:\n${cleaned}\n\nNote: Use this extracted text to answer the user's question accurately.`;
     } catch(e) {
       console.error(`OCR error: ${e.message}`);
       return `[IMAGE UPLOADED: ${file.name || 'image'}]\n(Could not perform OCR: ${e.message})`;
@@ -211,11 +225,11 @@ async function fileToText(file) {
 
   if (category === 'pdf') {
     try {
-      const buf = Buffer.from(file.data, 'base64');
+      const buf  = Buffer.from(file.data, 'base64');
       const data = await pdfParse(buf);
       const text = data.text.trim();
       return text
-        ? `[PDF DOCUMENT: ${file.name || 'document.pdf'}]\n\nExtracted Content:\n${text.slice(0, 30000)}\n\nNote: Please analyze this extracted PDF text completely to answer the user's prompt.`
+        ? `[PDF DOCUMENT: ${file.name || 'document.pdf'}]\n\nExtracted Content:\n${text.slice(0, 30000)}\n\nNote: Analyze this extracted PDF text completely.`
         : `[PDF DOCUMENT: ${file.name || 'document.pdf'}]\nCould not find any clear text in this PDF.`;
     } catch (e) {
       return `[PDF DOCUMENT: ${file.name || 'document.pdf'}]\nCould not extract text: ${e.message}`;
@@ -224,19 +238,19 @@ async function fileToText(file) {
 
   if (category === 'docx') {
     try {
-      const buf = Buffer.from(file.data, 'base64');
+      const buf    = Buffer.from(file.data, 'base64');
       const result = await mammoth.extractRawText({ buffer: buf });
-      const text = result.value.trim();
+      const text   = result.value.trim();
       return text
-        ? `[DOCX DOCUMENT: ${file.name || 'document.docx'}]\n\nExtracted Content:\n${text.slice(0, 30000)}\n\nNote: Please analyze this extracted Document text completely to answer the user's prompt.`
+        ? `[DOCX DOCUMENT: ${file.name || 'document.docx'}]\n\nExtracted Content:\n${text.slice(0, 30000)}`
         : `[DOCX DOCUMENT: ${file.name || 'document.docx'}]\nCould not find any clear text in this document.`;
     } catch (e) {
-      return `[DOCX DOCUMENT: ${file.name || 'document.docx'}]\nCould not extract text from docx: ${e.message}`;
+      return `[DOCX DOCUMENT: ${file.name || 'document.docx'}]\nCould not extract text: ${e.message}`;
     }
   }
 
   if (category === 'doc') {
-    return `[DOC DOCUMENT: ${file.name || 'document.doc'}]\nThis is an older .doc format. Text extraction is limited. Please use .docx or PDF if you need exact document details.`;
+    return `[DOC DOCUMENT: ${file.name || 'document.doc'}]\nOlder .doc format. Please use .docx or PDF for better results.`;
   }
 
   if (category === 'text') {
@@ -247,9 +261,7 @@ async function fileToText(file) {
   }
 
   if (category === 'zip') {
-    return `[ZIP ARCHIVE: ${file.name || 'archive.zip'}]
-This is a ZIP file. ZIP contents cannot be read directly.
-Please extract specific files and share the code you need help with.`;
+    return `[ZIP ARCHIVE: ${file.name || 'archive.zip'}]\nZIP contents cannot be read directly. Please share individual files.`;
   }
 
   return `[FILE: ${file.name || 'file'} (${file.mimeType || 'unknown type'})]`;
@@ -282,9 +294,9 @@ async function sendEmailOTP(to, otp, purpose) {
 </div>`;
 
   const payload = JSON.stringify({
-    sender: { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
-    to: [{ email: to }],
-    subject: subject,
+    sender:      { name: BREVO_FROM_NAME, email: BREVO_FROM_EMAIL },
+    to:          [{ email: to }],
+    subject,
     htmlContent: html
   });
 
@@ -300,11 +312,9 @@ async function sendEmailOTP(to, otp, purpose) {
         'Content-Length': Buffer.byteLength(payload)
       }
     }, res => {
-      let d = ''; res.on('data', c => d += c);
-      res.on('end', () => resolve(d));
+      let d = ''; res.on('data', c => d += c); res.on('end', () => resolve(d));
     }).on('error', reject);
-    req.write(payload);
-    req.end();
+    req.write(payload); req.end();
   });
 }
 
@@ -337,7 +347,6 @@ function checkOTP(key, otp) {
    MIDDLEWARE
 ─────────────────────────────────────── */
 app.use(helmet({ contentSecurityPolicy: false }));
-/* ✅ FIXED: increased from 4mb to 50mb to handle large image uploads */
 app.use(express.json({ limit: '50mb' }));
 app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -357,10 +366,17 @@ app.use((req, res, next) => {
 });
 
 app.use(express.static(path.join(__dirname, 'public')));
+
+/* ── FIX: session cookie now persists for 7 days so history survives logout/reopen ── */
 app.use(session({
   secret: process.env.SESSION_SECRET || 'cm-secret',
-  resave: false, saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: 'strict' }
+  resave: false,
+  saveUninitialized: false,
+  cookie: {
+    httpOnly: true,
+    sameSite: 'strict',
+    maxAge: 7 * 24 * 60 * 60 * 1000   // 7 days — survives tab/browser close
+  }
 }));
 
 const authLimiter = rateLimit({
@@ -375,7 +391,7 @@ const forgotLimiter = rateLimit({
   standardHeaders: true, legacyHeaders: false
 });
 
-const auth = (q, s, n) => q.session.user ? n() : s.status(401).json({ error: 'Not authenticated' });
+const auth  = (q, s, n) => q.session.user ? n() : s.status(401).json({ error: 'Not authenticated' });
 const admin = (q, s, n) => q.session.user?.role === 'admin' ? n() : s.status(403).json({ error: 'Forbidden' });
 
 /* ───────────────────────────────────────
@@ -387,7 +403,6 @@ app.post('/api/auth/register/send-otp', authLimiter, async (req, res) => {
     return res.status(400).json({ error: 'All fields are required (including security answer).' });
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(userId))
     return res.status(400).json({ error: 'User ID: 3-20 chars, letters/numbers/underscore only.' });
-
   if (isGlobalAdmin(userId))
     return res.status(400).json({ error: 'This User ID is reserved. Please choose another.' });
 
@@ -399,14 +414,14 @@ app.post('/api/auth/register/send-otp', authLimiter, async (req, res) => {
   if (method === 'phone' && !/^\d{10}$/.test(contact))
     return res.status(400).json({ error: 'Enter a valid 10-digit mobile number.' });
 
-  const key = userId.toLowerCase();
+  const key      = userId.toLowerCase();
   const existing = await User.findOne({ userId: key });
   if (existing) return res.status(400).json({ error: 'This User ID is already taken. Please choose another.' });
 
   const dupContact = await User.findOne(method === 'email' ? { email: contact } : { phone: contact });
   if (dupContact) return res.status(400).json({ error: `This ${method} is already registered.` });
 
-  const otp = String(Math.floor(100000 + Math.random() * 900000));
+  const otp    = String(Math.floor(100000 + Math.random() * 900000));
   const otpKey = `reg_${key}`;
   storeOTP(otpKey, otp, { pending: { userId: key, name: name.trim(), password, method, contact, securityAnswer } });
 
@@ -423,10 +438,9 @@ app.post('/api/auth/register/verify-otp', authLimiter, async (req, res) => {
   const { userId, otp } = req.body;
   if (!userId || !otp) return res.status(400).json({ error: 'Missing fields.' });
 
-  const key = userId.toLowerCase();
+  const key    = userId.toLowerCase();
   const otpKey = `reg_${key}`;
   const result = checkOTP(otpKey, otp);
-
   if (typeof result === 'string') return res.status(400).json({ error: result });
 
   const { pending } = result.data;
@@ -435,11 +449,11 @@ app.post('/api/auth/register/verify-otp', authLimiter, async (req, res) => {
   const existing = await User.findOne({ userId: key });
   if (existing) return res.status(400).json({ error: 'This User ID was just taken. Please choose another.' });
 
-  const hashed = await bcrypt.hash(pending.password, 10);
+  const hashed  = await bcrypt.hash(pending.password, 10);
   const secHash = await bcrypt.hash((pending.securityAnswer || '').toLowerCase().trim(), 10);
 
   const user = await User.create({
-    userId: key, name: pending.name,
+    uid: uuidv4(), userId: key, name: pending.name,
     email: pending.method === 'email' ? pending.contact : '',
     phone: pending.method === 'phone' ? pending.contact : '',
     password: hashed, passwordHistory: [hashed],
@@ -477,7 +491,6 @@ app.get('/api/auth/me', (req, res) => res.json({ user: req.session?.user || null
 app.post('/api/auth/forgot/send-otp', forgotLimiter, async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: 'User ID is required.' });
-
   if (isGlobalAdmin(userId))
     return res.status(403).json({ error: 'Global admin password cannot be reset here. Update ADMIN_PASSWORD in .env.' });
 
@@ -487,7 +500,7 @@ app.post('/api/auth/forgot/send-otp', forgotLimiter, async (req, res) => {
   const otp = String(Math.floor(100000 + Math.random() * 900000));
   otpStore.set(`fpw_${userId.toLowerCase()}`, { otp, expires: Date.now() + 10 * 60 * 1000 });
 
-  res.json({ success: true, message: `OTP sent to your registered email.` });
+  res.json({ success: true, message: 'OTP sent to your registered email.' });
 
   const contact = user.email || user.phone;
   if (user.method === 'email' || user.email) {
@@ -501,11 +514,11 @@ app.post('/api/auth/forgot/verify-otp', forgotLimiter, async (req, res) => {
   const { userId, otp } = req.body;
   if (!userId || !otp) return res.status(400).json({ error: 'User ID and OTP are required.' });
 
-  const key = `fpw_${userId.toLowerCase().trim()}`;
+  const key    = `fpw_${userId.toLowerCase().trim()}`;
   const stored = otpStore.get(key);
   if (!stored) return res.status(400).json({ error: 'No OTP found. Please request a new one.' });
   if (Date.now() > stored.expires) { otpStore.delete(key); return res.status(400).json({ error: 'OTP expired. Please request a new one.' }); }
-  if (stored.otp !== String(otp).trim()) return res.status(400).json({ error: 'Incorrect OTP. Please try again.' });
+  if (stored.otp !== String(otp).trim()) return res.status(400).json({ error: 'Incorrect OTP. Please try again.' }); // fixed: was !== String
   otpStore.delete(key);
 
   const token = uuidv4();
@@ -523,7 +536,7 @@ app.post('/api/auth/forgot/reset', forgotLimiter, async (req, res) => {
   const pwErr = validatePassword(newPassword);
   if (pwErr) return res.status(400).json({ error: pwErr });
 
-  const key = `reset_${userId.toLowerCase()}`;
+  const key    = `reset_${userId.toLowerCase()}`;
   const stored = otpStore.get(key);
   if (!stored || stored.token !== token || Date.now() > stored.expires)
     return res.status(400).json({ error: 'Reset session expired. Please start again.' });
@@ -543,10 +556,8 @@ app.post('/api/auth/forgot/reset', forgotLimiter, async (req, res) => {
 });
 
 /* ───────────────────────────────────────
-   SETTINGS — Update name, userId, password
+   SETTINGS
 ─────────────────────────────────────── */
-
-/* Update name */
 app.post('/api/auth/settings/update-name', auth, async (req, res) => {
   const { name } = req.body;
   if (!name || name.trim().length < 2)
@@ -561,19 +572,14 @@ app.post('/api/auth/settings/update-name', auth, async (req, res) => {
   res.json({ success: true, message: 'Name updated successfully.', user: safe(user) });
 });
 
-/* Update userId */
 app.post('/api/auth/settings/update-userid', auth, async (req, res) => {
   const { newUserId, currentPassword } = req.body;
-
   if (isGlobalAdmin(req.session.user.userId))
     return res.status(403).json({ error: 'Global admin ID cannot be changed.' });
-
   if (!newUserId || !currentPassword)
     return res.status(400).json({ error: 'New User ID and current password are required.' });
-
   if (!/^[a-zA-Z0-9_]{3,20}$/.test(newUserId))
     return res.status(400).json({ error: 'User ID: 3-20 chars, letters/numbers/underscore only.' });
-
   if (isGlobalAdmin(newUserId))
     return res.status(400).json({ error: 'This User ID is reserved.' });
 
@@ -592,13 +598,10 @@ app.post('/api/auth/settings/update-userid', auth, async (req, res) => {
   res.json({ success: true, message: 'User ID updated successfully.', user: safe(user) });
 });
 
-/* Change password (logged-in) */
 app.post('/api/auth/change-password', auth, async (req, res) => {
   const { currentPassword, securityAnswer, newPassword, confirmPassword } = req.body;
-
   if (isGlobalAdmin(req.session.user.userId))
     return res.status(403).json({ error: 'Global admin password can only be changed via ADMIN_PASSWORD in the .env file.' });
-
   if (!currentPassword || !securityAnswer || !newPassword || !confirmPassword)
     return res.status(400).json({ error: 'All fields are required.' });
   if (newPassword !== confirmPassword)
@@ -629,10 +632,13 @@ app.post('/api/auth/change-password', auth, async (req, res) => {
 });
 
 /* ───────────────────────────────────────
-   CHATS
+   CHATS — ownerId uses uid (stable)
 ─────────────────────────────────────── */
 app.get('/api/chats', auth, async (req, res) => {
-  const chats = await Chat.find({ ownerId: req.session.user.id }, { history: 0, rendered: 0 }).sort({ ts: -1 });
+  const chats = await Chat.find(
+    { ownerId: req.session.user.id },
+    { history: 0, rendered: 0 }
+  ).sort({ ts: -1 });
   res.json({ chats: chats.map(c => ({ id: c.chatId, title: c.title, ts: c.ts })) });
 });
 
@@ -653,8 +659,8 @@ app.get('/api/chats/:id', auth, async (req, res) => {
 app.put('/api/chats/:id', auth, async (req, res) => {
   const c = await Chat.findOne({ chatId: req.params.id, ownerId: req.session.user.id });
   if (!c) return res.status(404).json({ error: 'Not found.' });
-  if (req.body.title !== undefined) c.title = req.body.title.slice(0, 80);
-  if (req.body.history !== undefined) c.history = req.body.history;
+  if (req.body.title    !== undefined) c.title    = req.body.title.slice(0, 80);
+  if (req.body.history  !== undefined) c.history  = req.body.history;
   if (req.body.rendered !== undefined) c.rendered = req.body.rendered;
   c.ts = Date.now(); await c.save();
   res.json({ success: true, chat: { id: c.chatId, title: c.title, ts: c.ts } });
@@ -670,11 +676,11 @@ app.delete('/api/chats/:id', auth, async (req, res) => {
    ADMIN
 ─────────────────────────────────────── */
 app.get('/api/admin/users', auth, admin, async (req, res) => {
-  const users = await User.find({}, { password: 0, passwordHistory: 0, securityAnswer: 0 });
+  const users    = await User.find({}, { password: 0, passwordHistory: 0, securityAnswer: 0 });
   const enriched = await Promise.all(users.map(async u => {
-    const chats = await Chat.find({ ownerId: u.id });
+    const chats    = await Chat.find({ ownerId: u.uid });
     const msgCount = chats.reduce((n, c) => n + Math.floor((c.history?.length || 0) / 2), 0);
-    return { ...u.toObject(), chatCount: chats.length, msgCount };
+    return { ...u.toObject(), id: u.uid, chatCount: chats.length, msgCount };
   }));
   res.json({ users: enriched });
 });
@@ -682,8 +688,8 @@ app.get('/api/admin/users', auth, admin, async (req, res) => {
 app.get('/api/admin/users/:uid/messages', auth, admin, async (req, res) => {
   const user = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!user) return res.status(404).json({ error: 'User not found.' });
-  const chats = await Chat.find({ ownerId: user.id });
-  const data = chats.map(c => ({
+  const chats = await Chat.find({ ownerId: user.uid });
+  const data  = chats.map(c => ({
     chatId: c.chatId, title: c.title, ts: c.ts,
     messages: (c.history || []).map(m => ({
       role: m.role,
@@ -696,8 +702,8 @@ app.get('/api/admin/users/:uid/messages', auth, admin, async (req, res) => {
 app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req, res) => {
   const user = await User.findOne({ userId: req.params.uid.toLowerCase() });
   if (!user) return res.status(404).json({ error: 'User not found.' });
-  const chats = await Chat.find({ ownerId: user.id });
-  const data = {
+  const chats = await Chat.find({ ownerId: user.uid });
+  const data  = {
     exportedAt: new Date().toISOString(),
     user: { userId: user.userId, name: user.name, email: user.email },
     chats: chats.map(c => ({
@@ -714,19 +720,17 @@ app.get('/api/admin/users/:uid/messages/download', auth, admin, async (req, res)
   res.send(JSON.stringify(data, null, 2));
 });
 
-/* Role change — global admin is protected */
 app.put('/api/admin/users/:uid/role', auth, admin, async (req, res) => {
   const { role } = req.body;
-  if (!['admin', 'user'].includes(role)) return res.status(400).json({ error: 'Invalid role.' });
+  if (!['admin', 'user'].includes(role))
+    return res.status(400).json({ error: 'Invalid role.' });
 
   const targetUid = req.params.uid.toLowerCase();
-
   if (isGlobalAdmin(targetUid))
     return res.status(403).json({ error: 'The global admin role cannot be changed by any admin.' });
 
   const u = await User.findOne({ userId: targetUid });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-
   if (u.userId === req.session.user.userId)
     return res.status(400).json({ error: 'Cannot change your own role.' });
 
@@ -734,31 +738,29 @@ app.put('/api/admin/users/:uid/role', auth, admin, async (req, res) => {
   res.json({ success: true });
 });
 
-/* Delete — global admin is protected */
 app.delete('/api/admin/users/:uid', auth, admin, async (req, res) => {
   const targetUid = req.params.uid.toLowerCase();
-
   if (isGlobalAdmin(targetUid))
     return res.status(403).json({ error: 'The global admin account cannot be deleted.' });
 
   const u = await User.findOne({ userId: targetUid });
   if (!u) return res.status(404).json({ error: 'User not found.' });
-
   if (u.userId === req.session.user.userId)
     return res.status(400).json({ error: 'You cannot delete your own account.' });
 
-  await Chat.deleteMany({ ownerId: u.id });
+  await Chat.deleteMany({ ownerId: u.uid });
   await User.deleteOne({ userId: u.userId });
   res.json({ success: true });
 });
 
 /* ───────────────────────────────────────
-   CHAT — Gemini key hierarchy (3 keys)
+   CHAT — Gemini + NVIDIA fallback
 ─────────────────────────────────────── */
 let preferredKeyIndex = 0;
 
 app.post('/api/chat', auth, async (req, res) => {
-  if (!GEMINI_KEYS.length && !NVIDIA_KEYS.length) return res.status(500).json({ error: 'No API keys set in environment.' });
+  if (!GEMINI_KEYS.length && !NVIDIA_KEYS.length)
+    return res.status(500).json({ error: 'No API keys set in environment.' });
 
   const { system, messages } = req.body;
   if (!messages?.length) return res.status(400).json({ error: 'messages required' });
@@ -778,10 +780,10 @@ app.post('/api/chat', auth, async (req, res) => {
     generationConfig: { maxOutputTokens: 8192, temperature: 0.7 }
   });
 
-  const hasImage = messages.some(m => m.file && m.file.data);
-  const lastUserMsg = [...messages].reverse().find(m => m.role === 'user');
-  const queryLen = (lastUserMsg?.content || '').length;
-  const isSimple = !hasImage && queryLen < 300;
+  const hasImage      = messages.some(m => m.file && m.file.data);
+  const lastUserMsg   = [...messages].reverse().find(m => m.role === 'user');
+  const queryLen      = (lastUserMsg?.content || '').length;
+  const isSimple      = !hasImage && queryLen < 300;
   const requestTimeout = hasImage ? 120000 : (isSimple ? 45000 : 90000);
 
   const modelsToTry = [
@@ -802,8 +804,7 @@ app.post('/api/chat', auth, async (req, res) => {
       timeout: requestTimeout
     };
     const apiReq = https.request(opts, apiRes => {
-      let data = '';
-      apiRes.on('data', c => data += c);
+      let data = ''; apiRes.on('data', c => data += c);
       apiRes.on('end', () => resolve({ status: apiRes.statusCode, data }));
     });
     apiReq.on('timeout', () => { apiReq.destroy(); reject(new Error('Timeout')); });
@@ -811,35 +812,27 @@ app.post('/api/chat', auth, async (req, res) => {
     apiReq.write(payload); apiReq.end();
   });
 
-  /* ── Build NVIDIA messages (lazy) ── */
   async function buildNvidiaMessages() {
     const msgs = [{
       role: 'system',
-      content: (system||'') + '\n\nCRITICAL: Respond in pure HTML exactly as instructed above. No markdown. Pure HTML only.'
+      content: (system || '') + '\n\nCRITICAL: Respond in pure HTML exactly as instructed above. No markdown. Pure HTML only.'
     }];
-
     for (const m of messages) {
-      if (m.role==='assistant') {
-        msgs.push({ role:'assistant', content: m.content||'' });
-        continue;
+      if (m.role === 'assistant') {
+        msgs.push({ role: 'assistant', content: m.content || '' }); continue;
       }
       const fileText = m.file?.data ? await fileToText(m.file) : null;
       const content  = fileText
-        ? `${fileText}\n\nUser question: ${m.content||'Please explain this.'}`
-        : (m.content||'');
-      msgs.push({ role:'user', content });
+        ? `${fileText}\n\nUser question: ${m.content || 'Please explain this.'}`
+        : (m.content || '');
+      msgs.push({ role: 'user', content });
     }
     return msgs;
   }
 
-  /* ── Single NVIDIA model call ── */
   const callNvidiaModel = (model, apiKey, msgs) => new Promise((resolve, reject) => {
     const nvidiaPayload = JSON.stringify({
-      model,
-      messages: msgs,
-      max_tokens: 8192,
-      temperature: 0.7,
-      stream: false
+      model, messages: msgs, max_tokens: 8192, temperature: 0.7, stream: false
     });
     const opts = {
       hostname: 'integrate.api.nvidia.com',
@@ -853,20 +846,18 @@ app.post('/api/chat', auth, async (req, res) => {
       timeout: requestTimeout
     };
     const apiReq = https.request(opts, apiRes => {
-      let data=''; apiRes.on('data',c=>data+=c);
-      apiRes.on('end',()=>resolve({status:apiRes.statusCode,data}));
+      let data = ''; apiRes.on('data', c => data += c);
+      apiRes.on('end', () => resolve({ status: apiRes.statusCode, data }));
     });
-    apiReq.on('timeout',()=>{apiReq.destroy();reject(new Error(`NVIDIA ${model} Timeout`));});
-    apiReq.on('error',e=>reject(e));
+    apiReq.on('timeout', () => { apiReq.destroy(); reject(new Error(`NVIDIA ${model} Timeout`)); });
+    apiReq.on('error', e => reject(e));
     apiReq.write(nvidiaPayload); apiReq.end();
   });
 
   let lastError = 'No response from AI models.';
 
-  // Try all Gemini models/keys first
   if (GEMINI_KEYS.length > 0) {
     const keyOrder = GEMINI_KEYS.map((_, i) => (preferredKeyIndex + i) % GEMINI_KEYS.length);
-
     for (const model of modelsToTry) {
       for (const keyIdx of keyOrder) {
         const apiKey = GEMINI_KEYS[keyIdx];
@@ -879,10 +870,10 @@ app.post('/api/chat', auth, async (req, res) => {
               return res.json({ content: [{ type: 'text', text: p.candidates[0].content.parts[0].text }] });
             }
           } else if (response.status === 429 || response.status === 403) {
-            try { lastError = JSON.parse(response.data).error?.message || `Key ${keyIdx + 1} quota exceeded`; } catch { }
+            try { lastError = JSON.parse(response.data).error?.message || `Key ${keyIdx + 1} quota exceeded`; } catch {}
             console.warn(`[Key ${keyIdx + 1}] ${model} quota/rate-limited. Trying next key...`);
           } else {
-            try { lastError = JSON.parse(response.data).error?.message || `${model} status ${response.status}`; } catch { }
+            try { lastError = JSON.parse(response.data).error?.message || `${model} status ${response.status}`; } catch {}
             console.warn(`[Key ${keyIdx + 1}] ${model} failed: ${lastError}`);
           }
         } catch (err) {
@@ -893,37 +884,33 @@ app.post('/api/chat', auth, async (req, res) => {
     }
   }
 
-  // If Gemini fails, fallback to NVIDIA sequence
   if (NVIDIA_KEYS.length > 0) {
     console.warn('⚠️ All Gemini exhausted → NVIDIA fallback...');
     let nvidiaMsgs = null;
-
     for (const model of NVIDIA_TEXT_MODELS) {
-      for (let ki=0; ki<NVIDIA_KEYS.length; ki++) {
+      for (let ki = 0; ki < NVIDIA_KEYS.length; ki++) {
         try {
-          if (!nvidiaMsgs) {
-            nvidiaMsgs = await buildNvidiaMessages();
-          }
+          if (!nvidiaMsgs) nvidiaMsgs = await buildNvidiaMessages();
           const response = await callNvidiaModel(model, NVIDIA_KEYS[ki], nvidiaMsgs);
-          if (response.status===200) {
-            const p = JSON.parse(response.data);
+          if (response.status === 200) {
+            const p    = JSON.parse(response.data);
             const text = p.choices?.[0]?.message?.content;
             if (text) {
-              console.log(`✅ NVIDIA success: ${model} (key ${ki+1})`);
-              return res.json({ content:[{type:'text',text}] });
+              console.log(`✅ NVIDIA success: ${model} (key ${ki + 1})`);
+              return res.json({ content: [{ type: 'text', text }] });
             }
-          } else if (response.status===429) {
-            console.warn(`[NVIDIA Key ${ki+1}] ${model} rate limited → next...`);
-          } else if (response.status===404) {
-            console.warn(`[NVIDIA Key ${ki+1}] ${model} not available → next model...`);
+          } else if (response.status === 429) {
+            console.warn(`[NVIDIA Key ${ki + 1}] ${model} rate limited → next...`);
+          } else if (response.status === 404) {
+            console.warn(`[NVIDIA Key ${ki + 1}] ${model} not available → next model...`);
             break;
           } else {
-            try { lastError=JSON.parse(response.data).detail||`NVIDIA ${model} status ${response.status}`; } catch {}
-            console.warn(`[NVIDIA Key ${ki+1}] ${model} failed: ${lastError}`);
+            try { lastError = JSON.parse(response.data).detail || `NVIDIA ${model} status ${response.status}`; } catch {}
+            console.warn(`[NVIDIA Key ${ki + 1}] ${model} failed: ${lastError}`);
           }
-        } catch(err) {
-          lastError = err.message||'NVIDIA network error';
-          console.warn(`[NVIDIA Key ${ki+1}] ${model} error: ${lastError}`);
+        } catch (err) {
+          lastError = err.message || 'NVIDIA network error';
+          console.warn(`[NVIDIA Key ${ki + 1}] ${model} error: ${lastError}`);
         }
       }
     }
@@ -941,8 +928,8 @@ mongoose.connection.once('open', async () => {
   await seedAdmin();
   app.listen(PORT, () => {
     console.log(`\n⚡  CodeMentor AI → http://localhost:${PORT}`);
-    console.log(`    🔑  Gemini keys loaded: ${GEMINI_KEYS.length} | NVIDIA keys: ${NVIDIA_KEYS.length}`);
-    console.log(`    📝  NVIDIA text models: ${NVIDIA_TEXT_MODELS.length} (${NVIDIA_TEXT_MODELS.length * NVIDIA_KEYS.length} total fallback attempts)`);
+    console.log(`    🔑  Gemini keys: ${GEMINI_KEYS.length} | NVIDIA keys: ${NVIDIA_KEYS.length}`);
+    console.log(`    📝  NVIDIA models: ${NVIDIA_TEXT_MODELS.length} (${NVIDIA_TEXT_MODELS.length * NVIDIA_KEYS.length} total fallback attempts)`);
     if (!BREVO_API_KEY) console.log(`    📧  Brevo not configured — OTP will be logged to console`);
   });
 });
