@@ -1,6 +1,5 @@
 /* ══════════════════════════════════════════════════
 
-
    CodeMentor AI — app.js (v6)
    - Brevo email, Gemini key hierarchy
    - Settings modal: name / userId / password
@@ -8,8 +7,6 @@
    - Global admin protections
    - Desktop hamburger sidebar
 ══════════════════════════════════════════════════ */
-
-
 
 /* ── STATE ── */
 let CU = null, mode = 'code', lang = 'Auto', busy = false, activeId = null, cache = {};
@@ -115,10 +112,8 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 
 /* ══════════════════════════════════════
 
-
    AUTH TABS
 ══════════════════════════════════════ */
-
 
 function switchAuthTab(tab) {
   ['login','reg','forgot'].forEach(t => {
@@ -145,10 +140,8 @@ function clearAuthErrors() {
 
 /* ══════════════════════════════════════
 
-
    SIGN IN
 ══════════════════════════════════════ */
-
 
 async function doLogin() {
   const userId   = document.getElementById('loginUserId').value.trim();
@@ -209,7 +202,6 @@ async function doLogout() {
 }
 
 /* ══════════════════════════════════════
-
 
    REGISTER (2 steps: info → OTP)
 ══════════════════════════════════════ */
@@ -735,10 +727,8 @@ Respond in PURE HTML ONLY. Zero markdown. Zero asterisks. Zero hash symbols. Zer
 
 ════════════════════════════════════════════
 
-
 RULE 1 — ALWAYS GIVE TWO CODE VERSIONS
 ════════════════════════════════════════════
-
 
 Unless the user uploaded ANY file (like an image, PDF, document, or code script), structure EVERY plain code request like this:
 
@@ -749,10 +739,7 @@ Unless the user uploaded ANY file (like an image, PDF, document, or code script)
 <div class="sol-easy">
 <p>[How the Easy version works]</p>
 [CODE with green comments on EVERY single line, never smashed]
-<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><pre class="out-pre">Input : [the exact input values used in the code]
-Output: [the exact result printed or returned]
-Reason: [one short sentence explaining why this is correct]</pre></div></div>
-<div class="test-block"><div class="test-header">🧪 Test Cases</div><div class="test-body"><table class="test-table"><thead><tr><th>Input</th><th>Expected Output</th><th>Result</th></tr></thead><tbody><tr><td>[real input 1]</td><td>[expected output 1]</td><td class="pass">✓ Pass</td></tr><tr><td>[real input 2]</td><td>[expected output 2]</td><td class="pass">✓ Pass</td></tr><tr><td>[real input 3 — edge case]</td><td>[expected output 3]</td><td class="pass">✓ Pass</td></tr></tbody></table></div></div>
+<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-text"><strong>Input:</strong> [the exact input values used] &nbsp;|&nbsp; <strong>Output:</strong> [the exact result] &nbsp;|&nbsp; <strong>Reason:</strong> [one line why this is correct]</p></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
 <ul>
 <li><strong>🔷 KEYWORD</strong> <code>def</code> — Explanation...</li>
@@ -763,42 +750,56 @@ Reason: [one short sentence explaining why this is correct]</pre></div></div>
 <div class="sol-opt" style="display:none">
 <p>[Why this Optimized version is better]</p>
 [OPTIMIZED CODE with green comments]
-<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><pre class="out-pre">Input : [the exact input values used in the code]
-Output: [the exact result printed or returned]
-Reason: [one short sentence explaining why this is correct]</pre></div></div>
-<div class="test-block"><div class="test-header">🧪 Test Cases</div><div class="test-body"><table class="test-table"><thead><tr><th>Input</th><th>Expected Output</th><th>Result</th></tr></thead><tbody><tr><td>[real input 1]</td><td>[expected output 1]</td><td class="pass">✓ Pass</td></tr><tr><td>[real input 2]</td><td>[expected output 2]</td><td class="pass">✓ Pass</td></tr><tr><td>[real input 3 — edge case]</td><td>[expected output 3]</td><td class="pass">✓ Pass</td></tr></tbody></table></div></div>
+<div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-text"><strong>Input:</strong> [the exact input values used] &nbsp;|&nbsp; <strong>Output:</strong> [the exact result] &nbsp;|&nbsp; <strong>Reason:</strong> [one line why this is correct]</p></div></div>
 <h3>📖 Line-by-Line Explanation</h3>
 <ul><li>... (full list for ALL lines here) ...</li></ul>
 </div>
 
 ════════════════════════════════════════════
 
-
 RULE 2 — CODE FORMAT & COMMENTS
 ════════════════════════════════════════════
-
 
 CRITICAL: Every line of code MUST have a comment.
 - Green comment on one line, actual code on the VERY NEXT line.
 - NEVER put multiple code statements on a single line.
 - Use correct syntax (// for Java/JS/C++, # for Python).
-- JAVA CRITICAL: ALL standalone Java methods MUST use public static.
-  NEVER write just public alone for a method. Always write public static.
-  Example: public static int[] twoSum(int[] nums, int target)
-  Example: public static void main(String[] args)
+
+FULL PROGRAM WRAPPERS — ALWAYS wrap code in the complete runnable structure:
+
+JAVA: Always wrap ALL code inside a full class. NEVER show a bare method alone.
+  public class Main {
+    public static void main(String[] args) {
+      // call the method and print result here
+    }
+    public static [returnType] methodName(...) {
+      // method body
+    }
+  }
+
+C: Always include headers and int main(). NEVER show bare functions alone.
+  #include <stdio.h>
+  int methodName(...) { ... }
+  int main() {
+    // call the function and print result here
+    return 0;
+  }
+
+PYTHON: Always wrap runnable code inside if __name__ == "__main__":
+  def method_name(...):
+    # function body
+  if __name__ == "__main__":
+    # call the function and print result here
 
 ════════════════════════════════════════════
-
 
 RULE 3 — NO SKIPPING IN EXPLANATIONS
 ════════════════════════════════════════════
-
 
 CRITICAL: You MUST create a bullet point in "Line-by-Line Explanation" for absolutely EVERY SINGLE line of code shown in the blocks above.
 Labels: 🔷 KEYWORD, 🟡 FUNCTION, 🟢 BUILT-IN, ⬜ CODE.
 
 ════════════════════════════════════════════
-
 
 Always provide a deep, step-by-step trace in the "Real-Time Test Case Execution".
 - Use the <div class="trace-block"> structure.
@@ -812,7 +813,6 @@ Example:
 </div>
 
 ════════════════════════════════════════════
-
 
 RULE 6 — HTML ELEMENTS TO USE
 ════════════════════════════════════════════
