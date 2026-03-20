@@ -112,14 +112,6 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 
 /* ── INIT ── */
 (async () => {
-  // sessionStorage is cleared when browser/tab closes.
-  // If flag is missing = fresh open = force logout first then show login.
-  if (!sessionStorage.getItem('cm_open')) {
-    sessionStorage.setItem('cm_open', '1');
-    await api('POST', '/api/auth/logout');
-    document.getElementById('authModal').classList.add('open');
-    return;
-  }
   const res = await api('GET', '/api/auth/me');
   if (res.user) loginOk(res.user);
   else document.getElementById('authModal').classList.add('open');
@@ -201,6 +193,7 @@ function loginOk(user) {
 
 async function doLogout() {
   await api('POST', '/api/auth/logout');
+  localStorage.removeItem('cm_user');
   CU = null; activeId = null; cache = {};
   document.getElementById('authModal').classList.add('open');
   // Clear login fields
@@ -674,6 +667,8 @@ async function switchChat(id) {
       }
     });
     cache[id] = { history, rendered: rebuilt };
+    // Save rebuilt rendered back to server so it persists
+    await api('PUT', `/api/chats/${id}`, { rendered: rebuilt });
   }
   document.querySelectorAll('.chat-item').forEach(el => el.classList.toggle('active', el.dataset.id === id));
   scrollToBottom();
@@ -906,8 +901,19 @@ async function sendMessage() {
   busy = true;
   document.getElementById('sendBtn').disabled = true;
 
+  // Auto-detect language from question — override the lang selector if needed
+  const lowerText = text.toLowerCase();
+  let activeLang = lang;
+  if (lowerText.includes('html') || lowerText.includes('css') || lowerText.includes('webpage') || lowerText.includes('web page')) activeLang = 'HTML';
+  else if (lowerText.includes('typescript') || lowerText.includes(' ts ')) activeLang = 'TypeScript';
+  else if (lowerText.includes('javascript') || lowerText.includes(' js ')) activeLang = 'JavaScript';
+  else if (lowerText.includes('python')) activeLang = 'Python';
+  else if (lowerText.includes(' sql') || lowerText.includes('database query') || lowerText.includes('select ')) activeLang = 'SQL';
+  else if (lowerText.includes('golang') || lowerText.includes('go program') || lowerText.includes('in go')) activeLang = 'Go';
+  else if (lowerText.includes('rust program') || lowerText.includes('in rust')) activeLang = 'Rust';
+
   const hints = {
-    code:     `Give EASY and OPTIMIZED versions. Language: ${lang}.`,
+    code:     `Give EASY and OPTIMIZED versions. Language: ${activeLang}.`,
     explain:  'Use a real-world analogy first, then code examples.',
     debug:    'Explain the bug in plain English first, then show the fix.',
     roadmap:  'Give a dynamic phased roadmap using the rm-phase-grid HTML structure described in the system prompt. Show beginner → advanced phases with time estimates and skills for each.',
@@ -1036,13 +1042,18 @@ function addMessageActions(b) {
 
 
 window.showSolution = function(btn, type) {
-
   const b = btn.closest('.msg-bubble'); if (!b) return;
-  const easy = b.querySelector('.sol-easy'), opt = b.querySelector('.sol-opt');
+  const easy = b.querySelector('.sol-easy');
+  const opt  = b.querySelector('.sol-opt');
   b.querySelectorAll('.sol-tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
-  if (type === 'easy') { if (easy) easy.style.display = ''; if (opt) opt.style.display = 'none'; }
-  else                 { if (easy) easy.style.display = 'none'; if (opt) opt.style.display = ''; }
+  if (type === 'easy') {
+    if (easy) easy.style.display = '';
+    if (opt)  opt.style.display  = 'none';
+  } else {
+    if (easy) easy.style.display = 'none';
+    if (opt)  opt.style.display  = '';
+  }
 };
 
 
