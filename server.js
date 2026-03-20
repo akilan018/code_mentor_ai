@@ -820,47 +820,23 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   async function buildNvidiaMessages() {
-    const nvidiaReminder = `
+    // Teach NVIDIA by showing a perfect example of the expected HTML output
+    const perfectExample = '<h3>&#129504; Concept Explanation</h3><p>Example concept explanation here with real-world analogy.</p><div class="solution-tabs"><button class="sol-tab easy-tab active" onclick="showSolution(this,\'easy\')">&#11137; Easy</button><button class="sol-tab opt-tab" onclick="showSolution(this,\'optimized\')">&#8710; Optimized</button></div><div class="sol-easy"><p>Easy version uses a simple loop approach.</p><pre><code data-lang="python">\n# Define the function\ndef example(arr, target):\n# Set left pointer\n    low = 0\n# Set right pointer\n    high = len(arr) - 1\n# Loop while valid\n    while low <= high:\n# Find middle\n        mid = (low + high) // 2\n# Check middle\n        if arr[mid] == target:\n# Found — return index\n            return mid\n# Go right\n        elif arr[mid] < target:\n# Move left boundary\n            low = mid + 1\n# Go left\n        else:\n# Move right boundary\n            high = mid - 1\n# Not found\n    return -1\n# Test\nprint(example([2,5,7,8], 5))\n</code></pre><div class="out-block"><div class="out-header">&#9654; Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> arr = [2,5,7,8], target = 5</p><p class="out-line"><strong>Result &nbsp;:</strong> 1</p><p class="out-line"><strong>Reason &nbsp;:</strong> Value 5 is at index 1</p></div></div><h3>&#128218; Line-by-Line Explanation</h3><ul><li><strong>&#128311; KEYWORD</strong> <code>def example(arr, target):</code> &#8212; Defines the function</li><li><strong>&#11036; CODE</strong> <code>low = 0</code> &#8212; Sets left boundary to first index</li><li><strong>&#11036; CODE</strong> <code>return -1</code> &#8212; Returns -1 when target not found</li></ul><div class="trace-block"><div class="trace-header">&#128269; Real-Time Test Case Execution</div><div class="trace-body"><div class="trace-step"><span class="trace-n">Input</span><span class="trace-desc">arr=[2,5,7,8], target=5</span></div><div class="trace-step"><span class="trace-n">Step 1</span><span class="trace-desc">low=0, high=3, mid=1, arr[1]=5, found!</span></div><div class="trace-step"><span class="trace-n">&#10003; Result</span><span class="trace-desc">Return index 1</span></div></div></div></div><div class="sol-opt" style="display:none"><p>Optimized using O(log n) binary search.</p><pre><code data-lang="python">\n# Optimized function\ndef example_opt(arr, target):\n# Initialize pointers\n    low, high = 0, len(arr) - 1\n# Search loop\n    while low <= high:\n# Safe mid calculation\n        mid = low + (high - low) // 2\n# Found\n        if arr[mid] == target: return mid\n# Right half\n        if arr[mid] < target: low = mid + 1\n# Left half\n        else: high = mid - 1\n# Not found\n    return -1\nprint(example_opt([2,5,7,8], 5))\n</code></pre><div class="out-block"><div class="out-header">&#9654; Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> arr=[2,5,7,8], target=5</p><p class="out-line"><strong>Result &nbsp;:</strong> 1</p><p class="out-line"><strong>Reason &nbsp;:</strong> O(log n) — halves the search space each step</p></div></div></div><div class="tipb">Keep practising every day — you are doing great!</div>';
 
-ADDITIONAL CRITICAL RULES FOR CODE QUALITY:
+    const nvidiaSystem = (system || '') +
+      '\n\nYou must respond in the EXACT same HTML format as this example: ' + perfectExample +
+      '\n\nRULES: 1) sol-easy=simple beginner code, sol-opt=optimized efficient code with complexity. ' +
+      '2) Every code line has comment on line ABOVE it, never same line. ' +
+      '3) Correct syntax: return -1 not return-1, low = 0 not low=0, spaces around operators. ' +
+      '4) Python comments: #  Java/C/JS/Go comments: //  HTML: <!-- -->. ' +
+      '5) Explain every single line in Line-by-Line section. ' +
+      '6) Trace steps must use real computed values. ' +
+      '7) sol-opt must have style="display:none"';
 
-1. EASY VERSION must use the simplest possible approach — loops, if/else, basic logic only.
-   Easy means a complete beginner can understand it. No fancy tricks.
-
-2. OPTIMIZED VERSION must use the most efficient algorithm — best time/space complexity.
-   Always mention the complexity like O(log n), O(1), O(n) in the description.
-
-3. SYNTAX MUST BE 100% CORRECT — common mistakes to avoid:
-   WRONG: return-1   RIGHT: return -1
-   WRONG: low=0      RIGHT: low = 0
-   WRONG: if x>0:    RIGHT: if x > 0:
-   WRONG: #comment   RIGHT: # comment (space after #)
-   Always put spaces around operators: =, +, -, >, <, ==, !=
-
-4. EVERY SINGLE LINE of code must have a comment on the line ABOVE it.
-   WRONG: low = 0 # set low
-   RIGHT:
-   // Set the starting index to zero
-   low = 0
-
-5. Use correct comment syntax:
-   Python: # comment
-   Java, C, JavaScript, C++, TypeScript, Go: // comment
-   SQL: -- comment
-   HTML: <!-- comment -->
-
-6. NEVER write code and comment on the same line.
-   NEVER skip any line without a comment above it.
-
-7. The div class="sol-easy" contains ONLY the EASY simple version.
-   The div class="sol-opt" contains ONLY the OPTIMIZED efficient version.
-   NEVER swap them.`;
-
-    const msgs = [{ role: 'system', content: (system || '') + nvidiaReminder }];
+    const msgs = [{ role: 'system', content: nvidiaSystem }];
     for (const m of messages) {
       if (m.role === 'assistant') {
-        // Strip HTML from old replies for context — keep it short
-        const plain = (m.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+        const plain = (m.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
         msgs.push({ role: 'assistant', content: plain }); continue;
       }
       const fileText = m.file?.data ? await fileToText(m.file) : null;
@@ -1184,23 +1160,7 @@ ADDITIONAL CRITICAL RULES FOR CODE QUALITY:
             const text = p.choices?.[0]?.message?.content;
             if (text) {
               console.log(`✅ NVIDIA success: ${model} (key ${ki + 1})`);
-              // If NVIDIA didn't include optimized section, request it separately
-              let fullText = text;
-              if (!text.includes('===OPTIMIZED===') && nvidiaMsgs) {
-                try {
-                  const optMsgs = nvidiaMsgs.concat([
-                    { role: 'assistant', content: text.slice(0, 500) },
-                    { role: 'user', content: 'Now write the ===OPTIMIZED=== version of the same code with better time/space complexity. Use the exact same format: ===OPTIMIZED===, code block, INPUT, RESULT, REASON.' }
-                  ]);
-                  const optResp = await callNvidiaModel(model, NVIDIA_KEYS[ki], optMsgs);
-                  if (optResp.status === 200) {
-                    const optParsed = JSON.parse(optResp.data);
-                    const optText   = optParsed.choices?.[0]?.message?.content || '';
-                    if (optText) fullText = text + '\n' + optText;
-                  }
-                } catch(e) { /* ignore optimized fetch error */ }
-              }
-              const cleanText = nvidiaMarkdownToHtml(fullText);
+              const cleanText = nvidiaMarkdownToHtml(text);
               return res.json({ content: [{ type: 'text', text: cleanText }] });
             }
           } else if (response.status === 429) {
