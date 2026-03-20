@@ -826,10 +826,22 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   async function buildNvidiaMessages() {
-    const msgs = [{
-      role: 'system',
-      content: (system || '') + '\n\nCRITICAL: Respond in pure HTML exactly as instructed above. No markdown. Pure HTML only.'
-    }];
+    // Simplified strict prompt for NVIDIA models — they need very explicit instructions
+    const nvidiaSystem = `You are a coding teacher. Answer in PURE HTML only.
+STRICT RULES:
+1. Use <h3> for headings, <p> for paragraphs, <ul><li> for lists.
+2. Wrap ALL code in: <pre><code data-lang="python"> ... </code></pre>
+   Use correct lang: python, java, c, javascript, cpp
+3. Every code line MUST have a comment on the line ABOVE it (never after, never same line):
+   # This comment explains the next line
+   x = 5
+4. Always show Easy version first inside <div class="sol-easy"> then Optimized in <div class="sol-opt" style="display:none">
+5. Add tabs: <div class="solution-tabs"><button class="sol-tab easy-tab active" onclick="showSolution(this,'easy')">⬡ Easy</button><button class="sol-tab opt-tab" onclick="showSolution(this,'optimized')">⌬ Optimized</button></div>
+6. After code add: <div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [input]</p><p class="out-line"><strong>Result &nbsp;:</strong> [output]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [why]</p></div></div>
+7. End with: <div class="tipb">encouraging message</div>
+NO markdown. NO asterisks. NO backticks. NO hash symbols. ONLY HTML tags.`;
+
+    const msgs = [{ role: 'system', content: nvidiaSystem }];
     for (const m of messages) {
       if (m.role === 'assistant') {
         msgs.push({ role: 'assistant', content: m.content || '' }); continue;
@@ -841,6 +853,30 @@ app.post('/api/chat', auth, async (req, res) => {
       msgs.push({ role: 'user', content });
     }
     return msgs;
+  }
+
+  // Convert NVIDIA markdown response to HTML if it didn't follow instructions
+  function nvidiaMarkdownToHtml(text) {
+    if (text.includes('<h3>') || text.includes('<pre>') || text.includes('<div')) {
+      return text; // Already HTML, return as-is
+    }
+    // Convert markdown to basic HTML
+    let html = text
+      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^## (.+)$/gm, '<h3>$1</h3>')
+      .replace(/^# (.+)$/gm, '<h3>$1</h3>')
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      .replace(/^- (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
+    // Wrap code blocks
+    html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
+      const l = lang || 'python';
+      return '<pre><code data-lang="' + l + '">' + code.trim() + '</code></pre>';
+    });
+    // Wrap remaining paragraphs
+    html = html.replace(/^(?!<[hupd])(.+)$/gm, '<p>$1</p>');
+    return '<h3>🧠 Answer</h3>' + html + '<div class="tipb">Keep practising — you are doing great!</div>';
   }
 
   const callNvidiaModel = (model, apiKey, msgs) => new Promise((resolve, reject) => {
@@ -910,7 +946,8 @@ app.post('/api/chat', auth, async (req, res) => {
             const text = p.choices?.[0]?.message?.content;
             if (text) {
               console.log(`✅ NVIDIA success: ${model} (key ${ki + 1})`);
-              return res.json({ content: [{ type: 'text', text }] });
+              const cleanText = nvidiaMarkdownToHtml(text);
+              return res.json({ content: [{ type: 'text', text: cleanText }] });
             }
           } else if (response.status === 429) {
             console.warn(`[NVIDIA Key ${ki + 1}] ${model} rate limited → next...`);
