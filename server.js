@@ -826,11 +826,34 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   async function buildNvidiaMessages() {
-    // Use the SAME full system prompt as Gemini — so NVIDIA output is identical
-    const msgs = [{ role: 'system', content: system || '' }];
+    // NVIDIA gets a simple, focused prompt — plain text output, no complex HTML
+    // We wrap the response into HTML on the server side after receiving it
+    const simpleSystem = [
+      'You are a coding teacher for beginners. When asked to write code:',
+      '1. Write COMPLETE, RUNNABLE code only — no truncation, no shortcuts.',
+      '2. Every single code line MUST have a comment on the line DIRECTLY ABOVE it.',
+      '   WRONG: x = 5  # set x',
+      '   RIGHT:',
+      '   # Set x to starting value',
+      '   x = 5',
+      '3. For Python: always include if __name__ == "__main__": at the bottom.',
+      '4. For Java: always wrap in public class Main { public static void main... }',
+      '5. For C: always include #include <stdio.h> and int main() { ... return 0; }',
+      '6. After the code, write:',
+      '   INPUT: [exact input used]',
+      '   RESULT: [exact output printed]',
+      '   REASON: [one sentence why correct]',
+      '7. Then write a brief line-by-line explanation.',
+      '8. Use plain text only. No HTML tags. No markdown. No asterisks.',
+      '9. NEVER cut off or abbreviate code. Write every line in full.'
+    ].join('\n');
+
+    const msgs = [{ role: 'system', content: simpleSystem }];
     for (const m of messages) {
       if (m.role === 'assistant') {
-        msgs.push({ role: 'assistant', content: m.content || '' }); continue;
+        // For context, strip HTML from previous assistant replies
+        const plainContent = (m.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
+        msgs.push({ role: 'assistant', content: plainContent }); continue;
       }
       const fileText = m.file?.data ? await fileToText(m.file) : null;
       const userContent = fileText
@@ -901,33 +924,95 @@ app.post('/api/chat', auth, async (req, res) => {
     return fixed.trim();
   }
 
-  // Convert NVIDIA response to clean HTML
+  // Detect programming language from code content
+  function detectLang(code) {
+    if (code.includes('public class ') || code.includes('public static void main')) return 'java';
+    if (code.includes('#include') || code.includes('int main()')) return 'c';
+    if (code.includes('function ') || code.includes('const ') || code.includes('let ')) return 'javascript';
+    if (code.includes('def ') || code.includes('import ') || code.includes('print(')) return 'python';
+    return 'python';
+  }
+
+  // Wrap a plain-text NVIDIA response into proper CodeMentor HTML structure
   function nvidiaMarkdownToHtml(text) {
-    // Fix collapsed code inside existing <code> tags
-    text = text.replace(/<code([^>]*)>([\s\S]*?)<\/code>/g, function(m, attrs, code) {
-      return '<code' + attrs + '>' + fixCollapsedCode(code) + '</code>';
-    });
-    // If already HTML return it
-    if (text.includes('<h3>') || text.includes('<pre>') || text.includes('<div')) {
-      return text;
+    // If already HTML, just fix any collapsed code inside it
+    if (text.includes('<pre>') || text.includes('<div class=') || text.includes('<h3>')) {
+      return text.replace(/<code([^>]*)>([\s\S]*?)<\/code>/g, function(m, attrs, code) {
+        return '<code' + attrs + '>' + fixCollapsedCode(code) + '</code>';
+      });
     }
-    // Convert markdown headings and formatting
-    let html = text
-      .replace(/^### (.+)$/gm, '<h3>$1</h3>')
-      .replace(/^## (.+)$/gm, '<h3>$1</h3>')
-      .replace(/^# (.+)$/gm, '<h3>$1</h3>')
-      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
-      .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
-      .replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
-    // Convert fenced code blocks
-    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
-      const l = lang || 'python';
-      return '<pre><code data-lang="' + l + '">' + fixCollapsedCode(code).trim() + '</code></pre>';
-    });
-    // Wrap plain text lines
-    html = html.replace(/^(?!<)(.+)$/gm, '<p>$1</p>');
-    return '<h3>\uD83E\uDDE0 Answer</h3>' + html + '<div class="tipb">Keep practising \u2014 you are doing great!</div>';
+
+    // Parse plain text response from NVIDIA
+    // Extract code block (between ``` markers or indented block)
+    let codeBlock = '';
+    let remaining = text;
+    const fenced = text.match(/```(\w*)\n([\s\S]*?)```/);
+    if (fenced) {
+      codeBlock = fenced[2].trim();
+      remaining = text.replace(fenced[0], '').trim();
+    } else {
+      // Try to find indented code (4 spaces or tab indented lines)
+      const lines = text.split('\n');
+      const codeLines = [];
+      const textLines = [];
+      let inCode = false;
+      lines.forEach(function(line) {
+        if (line.startsWith('    ') || line.startsWith('\t') ||
+            line.match(/^(import |from |def |class |public |#include|int main)/)) {
+          codeLines.push(line.replace(/^    /, ''));
+          inCode = true;
+        } else {
+          if (inCode && line.trim() === '') { codeLines.push(''); }
+          else { textLines.push(line); }
+        }
+      });
+      codeBlock = codeLines.join('\n').trim();
+      remaining = textLines.join('\n').trim();
+    }
+
+    // Fix any collapsed code
+    codeBlock = fixCollapsedCode(codeBlock);
+    const lang = detectLang(codeBlock);
+
+    // Extract INPUT/RESULT/REASON if present
+    const inputMatch  = remaining.match(/INPUT:\s*(.+)/i);
+    const resultMatch = remaining.match(/RESULT:\s*(.+)/i);
+    const reasonMatch = remaining.match(/REASON:\s*(.+)/i);
+    const inputVal  = inputMatch  ? inputMatch[1].trim()  : 'See code above';
+    const resultVal = resultMatch ? resultMatch[1].trim() : 'See code output';
+    const reasonVal = reasonMatch ? reasonMatch[1].trim() : 'Code runs correctly';
+
+    // Clean remaining text (remove INPUT/RESULT/REASON lines)
+    const explanation = remaining
+      .replace(/INPUT:.+/gi, '').replace(/RESULT:.+/gi, '').replace(/REASON:.+/gi, '')
+      .replace(/```[\s\S]*?```/g, '').trim();
+
+    // Build proper HTML structure matching Gemini output
+    const codeHtml = codeBlock
+      ? '<pre><code data-lang="' + lang + '">' + codeBlock + '</code></pre>'
+      : '<p>No code generated.</p>';
+
+    const outHtml = '<div class="out-block"><div class="out-header">&#9654; Expected Output</div>' +
+      '<div class="out-body">' +
+      '<p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> ' + inputVal + '</p>' +
+      '<p class="out-line"><strong>Result &nbsp;:</strong> ' + resultVal + '</p>' +
+      '<p class="out-line"><strong>Reason &nbsp;:</strong> ' + reasonVal + '</p>' +
+      '</div></div>';
+
+    const explHtml = explanation
+      ? '<h3>&#128218; Explanation</h3><p>' + explanation.replace(/\n/g, '</p><p>') + '</p>'
+      : '';
+
+    return '<h3>&#129504; Easy Version</h3>' +
+      '<div class="solution-tabs">' +
+      '<button class="sol-tab easy-tab active" onclick="showSolution(this,\"easy\")">&#11137; Easy</button>' +
+      '<button class="sol-tab opt-tab" onclick="showSolution(this,\"optimized\")">&#8710; Optimized</button>' +
+      '</div>' +
+      '<div class="sol-easy">' +
+      codeHtml + outHtml + explHtml +
+      '</div>' +
+      '<div class="sol-opt" style="display:none"><p>Switch to Gemini for optimized version!</p></div>' +
+      '<div class="tipb">Great effort! Keep practising and you will master this.</div>';
   }
 
   const callNvidiaModel = (model, apiKey, msgs) => new Promise((resolve, reject) => {
