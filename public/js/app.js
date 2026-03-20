@@ -112,15 +112,18 @@ const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>
 
 /* ── INIT ── */
 (async () => {
+  // sessionStorage is cleared when browser/tab closes.
+  // If flag is missing = fresh open = force logout first then show login.
+  if (!sessionStorage.getItem('cm_open')) {
+    sessionStorage.setItem('cm_open', '1');
+    await api('POST', '/api/auth/logout');
+    document.getElementById('authModal').classList.add('open');
+    return;
+  }
   const res = await api('GET', '/api/auth/me');
   if (res.user) loginOk(res.user);
   else document.getElementById('authModal').classList.add('open');
 })();
-
-// Logout when tab or browser window is closed
-window.addEventListener('beforeunload', () => {
-  navigator.sendBeacon('/api/auth/logout');
-});
 
 /* ══════════════════════════════════════
 
@@ -134,6 +137,14 @@ function switchAuthTab(tab) {
   document.getElementById('form-' + tab).style.display = 'block';
   document.getElementById('tab-login')?.classList.toggle('active', tab === 'login');
   document.getElementById('tab-reg')?.classList.toggle('active', tab === 'reg');
+  // Clear registration fields when switching away from sign-up tab
+  if (tab === 'login') {
+    ['regName','regUserId','regEmail','regPass','regSecAnswer'].forEach(id => {
+      const el = document.getElementById(id); if (el) el.value = '';
+    });
+    const otpSec = document.getElementById('regOtpSection');
+    if (otpSec) otpSec.remove();
+  }
   // Reset forgot steps
   if (tab === 'forgot') {
     document.getElementById('forgot-step1').style.display = '';
