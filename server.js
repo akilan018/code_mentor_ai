@@ -495,7 +495,11 @@ app.post('/api/auth/login', authLimiter, async (req, res) => {
   res.json({ success: true, user: safe(user) });
 });
 
-app.post('/api/auth/logout', (req, res) => req.session.destroy(() => res.json({ success: true })));
+app.post('/api/auth/logout', (req, res) => {
+  req.session.destroy(() => {
+    res.json({ success: true });
+  });
+});
 app.get('/api/auth/me', (req, res) => res.json({ user: req.session?.user || null }));
 
 /* ───────────────────────────────────────
