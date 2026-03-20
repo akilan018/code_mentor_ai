@@ -221,19 +221,9 @@ async function fileToText(file) {
   const category = getFileCategory(file.mimeType || '', file.name || '');
 
   if (category === 'image') {
-    try {
-      console.log(`[OCR] Starting OCR on image: ${file.name}`);
-      const buf = Buffer.from(file.data, 'base64');
-      const { data: { text } } = await Tesseract.recognize(buf, 'eng', { logger: () => {} });
-      const cleaned = text.trim() ? text.trim().slice(0, 15000) : '';
-      if (!cleaned) {
-        return `[IMAGE UPLOADED: ${file.name || 'image'}]\nImage was scanned but no readable text was found.`;
-      }
-      return `[IMAGE UPLOADED: ${file.name || 'image'}]\nExtracted Content via OCR:\n${cleaned}\n\nNote: Use this extracted text to answer the user's question accurately.`;
-    } catch(e) {
-      console.error(`OCR error: ${e.message}`);
-      return `[IMAGE UPLOADED: ${file.name || 'image'}]\n(Could not perform OCR: ${e.message})`;
-    }
+    // Images are sent directly to Gemini as inlineData — no OCR needed.
+    // For NVIDIA fallback, just send a note that an image was attached.
+    return `[IMAGE UPLOADED: ${file.name || 'image'}]\nPlease analyze and explain this image in detail.`;
   }
 
   if (category === 'pdf') {
