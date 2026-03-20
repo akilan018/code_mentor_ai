@@ -1049,78 +1049,15 @@ app.post('/api/chat', auth, async (req, res) => {
     };
   }
 
-  // Convert NVIDIA response into full Gemini-identical HTML
-  function nvidiaMarkdownToHtml(text, hintLang) {
-    // If already proper HTML — just fix collapsed code
-    if (text.includes('<pre>') || text.includes('<div class=') || text.includes('<h3>')) {
-      return text.replace(/<code([^>]*)>([\s\S]*?)<\/code>/g, function(m, attrs, code) {
-        return '<code' + attrs + '>' + fixCollapsedCode(code) + '</code>';
-      });
-    }
-
-    // Parse all sections
-    const conceptM = text.match(/===CONCEPT===([\s\S]*?)(?====)/);
-    const easyM    = text.match(/===EASY===([\s\S]*?)(?====)/);
-    const explM    = text.match(/===EXPLANATION===([\s\S]*?)(?====)/);
-    const traceM   = text.match(/===TRACE===([\s\S]*?)(?====|$)/);
-    const optM     = text.match(/===OPTIMIZED===([\s\S]*?)(?====|$)/);
-    const tipM     = text.match(/===TIP===([\s\S]*?)(?====|$)/);
-
-    const concept = conceptM ? conceptM[1].trim() : '';
-    const easyRaw = easyM   ? easyM[1].trim()    : text;
-    const explRaw = explM   ? explM[1].trim()     : '';
-    const traceRaw= traceM  ? traceM[1].trim()    : '';
-    const optRaw  = optM    ? optM[1].trim()       : '';
-    const tip     = tipM    ? tipM[1].trim()       : 'Keep practising — you are doing great!';
-
-    const easy = parseNvidiaSection(easyRaw, hintLang);
-    const opt  = optRaw ? parseNvidiaSection(optRaw, hintLang) : null;
-    const expl = explRaw || easy.explanation;
-
-    // Code HTML
-    const easyCodeHtml = easy.code
-      ? '<pre><code data-lang="' + easy.lang + '">' + easy.code + '</code></pre>'
-      : '<p>See explanation below.</p>';
-    const optCodeHtml = opt && opt.code
-      ? '<pre><code data-lang="' + opt.lang + '">' + opt.code + '</code></pre>'
-      : '<p>No optimized version.</p>';
-
-    // Trace HTML
-    let traceSteps = '<div class="trace-step"><span class="trace-n">Input</span><span class="trace-desc">' + easy.input + '</span></div>';
-    if (traceRaw) {
-      traceRaw.split('\n').forEach(function(line) {
-        const sm = line.match(/^STEP\s*(\d+)\s*[:.]?\s*(.+)/i);
-        const om = line.match(/^OUTPUT\s*[:.]?\s*(.+)/i);
-        if (sm) traceSteps += '<div class="trace-step"><span class="trace-n">Step ' + sm[1] + '</span><span class="trace-desc">' + sm[2].trim() + '</span></div>';
-        else if (om) traceSteps += '<div class="trace-step"><span class="trace-n">&#10003; Output: ' + om[1].trim() + '</span><span class="trace-desc">This is the final answer.</span></div>';
-      });
-    } else {
-      traceSteps += '<div class="trace-step"><span class="trace-n">Result</span><span class="trace-desc">' + easy.result + '</span></div>';
-    }
-    const traceHtml = '<div class="trace-block"><div class="trace-header">&#128269; Real-Time Test Case Execution</div><div class="trace-body">' + traceSteps + '</div></div>';
-
-    const explHtml    = buildExplHtml(expl, easy.lang, easy.code);
-    const optExplHtml = opt ? buildExplHtml(opt.explanation, opt.lang, opt.code) : '';
-
-    return '<h3>&#129504; Concept Explanation</h3>' +
-      '<p>' + (concept || easy.desc || 'See easy version below.') + '</p>' +
-      '<div class="solution-tabs">' +
-      "<button class=\"sol-tab easy-tab active\" onclick=\"showSolution(this,'easy')\">&#11137; Easy</button>" +
-      "<button class=\"sol-tab opt-tab\" onclick=\"showSolution(this,'optimized')\">&#8710; Optimized</button>" +
-      '</div>' +
-      '<div class="sol-easy">' +
-      '<p>' + (easy.desc || 'Simple approach.') + '</p>' +
-      easyCodeHtml +
-      buildOutBlock(easy.input, easy.result, easy.reason) +
-      explHtml + traceHtml +
-      '</div>' +
-      '<div class="sol-opt" style="display:none">' +
-      '<p>' + (opt ? (opt.desc || 'More efficient approach.') : 'Optimized version.') + '</p>' +
-      optCodeHtml +
-      (opt ? buildOutBlock(opt.input, opt.result, opt.reason) : '') +
-      optExplHtml +
-      '</div>' +
-      '<div class="tipb">' + tip + '</div>';
+  // Process NVIDIA response — fix any collapsed code lines then return as-is
+  // NVIDIA now receives the exact same system prompt as Gemini so output should match
+  function nvidiaMarkdownToHtml(text) {
+    if (!text) return '<p>No response received.</p>';
+    // Fix collapsed code inside any <code> blocks
+    text = text.replace(/<code([^>]*)>([\s\S]*?)<\/code>/g, function(m, attrs, code) {
+      return '<code' + attrs + '>' + fixCollapsedCode(code) + '</code>';
+    });
+    return text;
   }
 
 
@@ -1207,8 +1144,7 @@ app.post('/api/chat', auth, async (req, res) => {
                   }
                 } catch(e) { /* ignore optimized fetch error */ }
               }
-              const hintLang = detectLangFromMsg((messages.find(function(m){return m.role==='user';})||{}).content);
-              const cleanText = nvidiaMarkdownToHtml(fullText, hintLang);
+              const cleanText = nvidiaMarkdownToHtml(fullText);
               return res.json({ content: [{ type: 'text', text: cleanText }] });
             }
           } else if (response.status === 429) {
