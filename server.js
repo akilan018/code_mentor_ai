@@ -820,8 +820,42 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   async function buildNvidiaMessages() {
-    // Send same system prompt as Gemini + one extra reminder about Easy/Optimized order
-    const nvidiaReminder = '\n\nCRITICAL REMINDER: The div class="sol-easy" must contain the SIMPLE EASY beginner version of the code. The div class="sol-opt" must contain the OPTIMIZED efficient version. Never put optimized code in sol-easy or easy code in sol-opt.';
+    const nvidiaReminder = `
+
+ADDITIONAL CRITICAL RULES FOR CODE QUALITY:
+
+1. EASY VERSION must use the simplest possible approach — loops, if/else, basic logic only.
+   Easy means a complete beginner can understand it. No fancy tricks.
+
+2. OPTIMIZED VERSION must use the most efficient algorithm — best time/space complexity.
+   Always mention the complexity like O(log n), O(1), O(n) in the description.
+
+3. SYNTAX MUST BE 100% CORRECT — common mistakes to avoid:
+   WRONG: return-1   RIGHT: return -1
+   WRONG: low=0      RIGHT: low = 0
+   WRONG: if x>0:    RIGHT: if x > 0:
+   WRONG: #comment   RIGHT: # comment (space after #)
+   Always put spaces around operators: =, +, -, >, <, ==, !=
+
+4. EVERY SINGLE LINE of code must have a comment on the line ABOVE it.
+   WRONG: low = 0 # set low
+   RIGHT:
+   // Set the starting index to zero
+   low = 0
+
+5. Use correct comment syntax:
+   Python: # comment
+   Java, C, JavaScript, C++, TypeScript, Go: // comment
+   SQL: -- comment
+   HTML: <!-- comment -->
+
+6. NEVER write code and comment on the same line.
+   NEVER skip any line without a comment above it.
+
+7. The div class="sol-easy" contains ONLY the EASY simple version.
+   The div class="sol-opt" contains ONLY the OPTIMIZED efficient version.
+   NEVER swap them.`;
+
     const msgs = [{ role: 'system', content: (system || '') + nvidiaReminder }];
     for (const m of messages) {
       if (m.role === 'assistant') {
