@@ -830,65 +830,13 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   async function buildNvidiaMessages() {
-    const simpleSystem = [
-      'You are a coding teacher for beginners. When asked to write code, always give TWO versions.',
-      '',
-      'FORMAT YOUR RESPONSE EXACTLY LIKE THIS:',
-      '',
-      '===CONCEPT===',
-      '[2-3 sentence explanation with a real-world analogy]',
-      '',
-      '===EASY===',
-      '[How the easy version works in 1 sentence]',
-      '```[language]',
-      '[COMPLETE RUNNABLE CODE — every line must have its comment on the line ABOVE it]',
-      '[NEVER put comment after code on same line — comment goes on its OWN line ABOVE]',
-      '[NEVER truncate or cut short — write every single line in full]',
-      '```',
-      'INPUT: [exact input values used when running the code]',
-      'RESULT: [exact output printed to screen]',
-      'REASON: [one sentence why this is correct]',
-      '',
-      '===EXPLANATION===',
-      'Write ONE bullet for EVERY SINGLE LINE of code — no skipping any line.',
-      'Format: - codeline — what this line does in plain English',
-      'Example: - low = 0 — sets the left boundary of the search to the first index (0)',
-      'Example: - while low <= high: — keeps the loop running as long as search space exists',
-      '',
-      '===TRACE===',
-      'STEP 1: [what happens at step 1 with actual values]',
-      'STEP 2: [what happens at step 2 with actual values]',
-      'STEP 3: [what happens at step 3 with actual values]',
-      '[continue for each meaningful step — use real computed values at every step]',
-      'OUTPUT: [final answer with actual value]',
-      '',
-      '===OPTIMIZED===',
-      '[Why this version is better — mention time/space complexity]',
-      '```[language]',
-      '[COMPLETE OPTIMIZED CODE — same comment rules: comment ABOVE each line]',
-      '```',
-      'INPUT: [exact input values]',
-      'RESULT: [exact output printed]',
-      'REASON: [one sentence why this is correct]',
-      '',
-      '===TIP===',
-      '[one encouraging sentence for the student]',
-      '',
-      'RULES:',
-      '1. NEVER truncate code. Write every line completely.',
-      '2. Comment goes on its OWN LINE ABOVE the code line — never after, never same line.',
-      '3. Python: include if __name__ == "__main__": block at bottom.',
-      '4. Java: wrap in public class Main { public static void main(String[] args) {} }',
-      '5. C: include #include <stdio.h> and int main() { return 0; }',
-      '6. Plain text only — no HTML tags, no markdown asterisks, no backtick formatting.',
-      '7. In ===TRACE===, use REAL computed values at every step, not vague descriptions.'
-    ].join('\n');
-
-    const msgs = [{ role: 'system', content: simpleSystem }];
+    // Send the EXACT same system prompt as Gemini — NVIDIA must produce identical HTML
+    const msgs = [{ role: 'system', content: system || '' }];
     for (const m of messages) {
       if (m.role === 'assistant') {
-        const plainContent = (m.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
-        msgs.push({ role: 'assistant', content: plainContent }); continue;
+        // Strip HTML from old replies for context — keep it short
+        const plain = (m.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500);
+        msgs.push({ role: 'assistant', content: plain }); continue;
       }
       const fileText = m.file?.data ? await fileToText(m.file) : null;
       const userContent = fileText
@@ -902,136 +850,138 @@ app.post('/api/chat', auth, async (req, res) => {
   // Fix code that NVIDIA collapses onto one line
   function fixCollapsedCode(code) {
     let fixed = code;
-
-    // Step 1: Protect "from X import Y" — replace with placeholder so it won't be split
     const fromImports = [];
     fixed = fixed.replace(/from [\w.]+ import [\w, *()]+/g, function(m) {
       fromImports.push(m);
-      return '__FROMIMPORT' + (fromImports.length - 1) + '__';
+      return '__FI' + (fromImports.length - 1) + '__';
     });
-
-    // Step 2: Split "# comment  next_code" — double space after comment = new line
     fixed = fixed.replace(/(#[^\n]*?)  +([a-zA-Z_#])/g, '$1\n$2');
-
-    // Step 3: Insert newline before standalone Python keywords merged mid-line
-    const kwds = ['import ', 'def ', 'class ', 'elif ', 'else:', 'for ', 'while ', 'with ', 'try:', 'except ', 'finally:', 'return ', 'if '];
+    const kwds = ['import ','def ','class ','elif ','else:','for ','while ','with ','try:','except ','finally:','return ','if '];
     kwds.forEach(function(kw) {
-      const parts = fixed.split(kw);
-      const rebuilt = [];
+      const parts = fixed.split(kw); const rebuilt = [];
       for (let i = 0; i < parts.length; i++) {
         rebuilt.push(parts[i]);
         if (i < parts.length - 1) {
-          const lastChar = parts[i].slice(-1);
-          if (lastChar !== '\n' && parts[i].trim().length > 0) {
-            rebuilt.push('\n' + kw);
-          } else {
-            rebuilt.push(kw);
-          }
+          const lc = parts[i].slice(-1);
+          rebuilt.push((lc !== '\n' && parts[i].trim().length > 0) ? '\n' + kw : kw);
         }
       }
       fixed = rebuilt.join('');
     });
-
-    // Step 4: Restore "from X import Y" placeholders
-    fromImports.forEach(function(fi, idx) {
-      fixed = fixed.replace('__FROMIMPORT' + idx + '__', fi);
-    });
-    // Ensure from-imports start on their own line
+    fromImports.forEach(function(fi, idx) { fixed = fixed.replace('__FI' + idx + '__', fi); });
     fixed = fixed.replace(/([^\n]) +(from [\w.]+ import)/g, '$1\n$2');
-
-    // Step 5: Split inline comments that got merged with code (single space)
-    // e.g. "import keras # Define model" → two lines
-    fixed = fixed.replace(/([^#\n]+) (#[^\n]+)/g, function(m, codePart, comment) {
-      // Only split if codePart is real code (not already a comment line)
-      if (codePart.trim().startsWith('#')) return m;
-      return codePart.trimEnd() + '\n' + comment;
+    fixed = fixed.replace(/([^#\n]+) (#[^\n]+)/g, function(m, c, cm) {
+      if (c.trim().startsWith('#')) return m;
+      return c.trimEnd() + '\n' + cm;
     });
-
-    // Step 6: Split Java/C/JS lines
-    fixed = fixed.replace(/;[ \t]+(\/\/)/g, ';\n$1');
-    fixed = fixed.replace(/\{[ \t]+(\/\/)/g, '{\n  $1');
-    fixed = fixed.replace(/\}[ \t]+(\/\/)/g, '}\n$1');
-
-    // Step 7: Remove trailing spaces and collapse ALL multiple newlines to single
+    fixed = fixed.replace(/; *(\/\/)/g, ';\n$1');
     fixed = fixed.replace(/ +\n/g, '\n');
     fixed = fixed.replace(/\n{2,}/g, '\n');
-
     return fixed.trim();
   }
 
-  // Detect programming language from code content
+  // Detect language from code
   function detectLang(code) {
     if (!code) return 'python';
     if (code.includes('public class ') || code.includes('public static void main')) return 'java';
     if (code.includes('#include') || code.includes('int main()') || code.includes('printf(')) return 'c';
-    if (code.includes('interface ') || code.includes(': string') || code.includes(': number') ||
-        code.includes(': boolean') || code.includes('type ') && code.includes('=') || code.includes('<T>')) return 'typescript';
-    if (code.includes('SELECT ') || code.includes('FROM ') || code.includes('INSERT INTO') ||
-        code.includes('CREATE TABLE') || code.includes('WHERE ')) return 'sql';
-    if (code.includes('<!DOCTYPE') || code.includes('<html') || code.includes('<div') ||
-        code.includes('<body') || code.includes('<head')) return 'html';
+    if (code.includes('interface ') || code.includes(': string') || code.includes(': number') || code.includes(': boolean')) return 'typescript';
+    if (code.includes('SELECT ') || code.includes('FROM ') || code.includes('INSERT INTO') || code.includes('CREATE TABLE')) return 'sql';
+    if (code.includes('<!DOCTYPE') || code.includes('<html') || code.includes('<div') || code.includes('<body')) return 'html';
     if (code.includes('func ') && code.includes('package ')) return 'go';
-    if (code.includes('fn ') && code.includes('let mut') || code.includes('impl ')) return 'rust';
-    if (code.includes('function ') || code.includes('const ') || code.includes('let ') ||
-        code.includes('var ') || code.includes('=>') || code.includes('console.log')) return 'javascript';
+    if ((code.includes('fn ') && code.includes('let mut')) || code.includes('impl ')) return 'rust';
+    if (code.includes('function ') || code.includes('const ') || code.includes('console.log') || code.includes('=>')) return 'javascript';
     if (code.includes('def ') || code.includes('print(') || code.includes('import ')) return 'python';
     return 'python';
   }
 
-  // Parse a section of NVIDIA plain text to extract code + metadata
-  function parseNvidiaSection(sectionText) {
-    let code = '';
-    let remaining = sectionText;
-
-    // Try fenced code block first
-    const fenced = sectionText.match(/```(\w*)[\r\n]([\s\S]*?)```/);
-    if (fenced) {
-      code = fixCollapsedCode(fenced[2].trim());
-      remaining = sectionText.replace(fenced[0], '').trim();
-    } else {
-      // Fallback: extract lines that look like code (start with keywords or indentation)
-      const lines = sectionText.split('\n');
-      const codeLines = [];
-      const textLines = [];
-      lines.forEach(function(line) {
-        const t = line.trim();
-        if (t.match(/^(def |class |import |from |public |private |protected |static |#include|int |void |if |elif |else|for |while |return |print|func |fn |let |const |var |SELECT |FROM |INSERT|CREATE|UPDATE|DELETE|<html|<div|<body|<!DOCTYPE|interface |type )/i)) {
-          codeLines.push(line);
-        } else if (line.startsWith('    ') || line.startsWith('\t')) {
-          codeLines.push(line);
-        } else {
-          textLines.push(line);
-        }
-      });
-      if (codeLines.length > 2) {
-        code = fixCollapsedCode(codeLines.join('\n').trim());
-        remaining = textLines.join('\n').trim();
-      }
+  // Auto-explain a single line of code
+  function autoExplainLine(line) {
+    const t = line.trim();
+    if (!t) return null;
+    if (t.startsWith('#') || t.startsWith('//') || t.startsWith('/*'))
+      return { icon: '🟢 BUILT-IN', label: t, desc: 'Comment — ' + t.replace(/^[#/]+\s*/, '') };
+    if (t.startsWith('def '))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Defines function <strong>' + (t.match(/def (\w+)/)||['','?'])[1] + '</strong>' };
+    if (t.startsWith('class '))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Creates class <strong>' + (t.match(/class (\w+)/)||['','?'])[1] + '</strong>' };
+    if (t.startsWith('import ') || t.startsWith('from '))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Imports: <strong>' + t + '</strong>' };
+    if (t.startsWith('return '))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Returns <strong>' + t.replace('return ','') + '</strong> as the answer' };
+    if (t.startsWith('if ') || t.startsWith('elif '))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Checks condition: <strong>' + t.replace(/^(if|elif) /,'').replace(':','') + '</strong>' };
+    if (t === 'else:')
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Runs when none of the above conditions matched' };
+    if (t.startsWith('for '))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Loops — <strong>' + t.replace(':','') + '</strong>' };
+    if (t.startsWith('while '))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Keeps looping while <strong>' + t.replace(/^while /,'').replace(':','') + '</strong>' };
+    if (t.startsWith('print(') || t.startsWith('console.log') || t.startsWith('printf('))
+      return { icon: '🟢 BUILT-IN', label: t, desc: 'Prints output: <strong>' + t + '</strong>' };
+    if (t.includes('public class'))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Declares the main Java class' };
+    if (t.includes('public static void main'))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Entry point — program starts running here' };
+    if (t.includes('public static'))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Public static method — callable without creating an object' };
+    if (t.startsWith('#include'))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Includes library: <strong>' + t + '</strong>' };
+    if (t === 'return 0;')
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Returns 0 — signals the program ended successfully' };
+    if (t === '{')  return { icon: '⬜ CODE', label: t, desc: 'Opens a block of code' };
+    if (t === '}' || t === '};') return { icon: '⬜ CODE', label: t, desc: 'Closes the block of code' };
+    if (t.startsWith('if __name__'))
+      return { icon: '🔷 KEYWORD', label: t, desc: 'Runs code below only when this file is run directly' };
+    if (t.includes(' = ')) {
+      const parts = t.split(' = ');
+      return { icon: '⬜ CODE', label: t, desc: 'Sets <strong>' + parts[0].trim() + '</strong> to <strong>' + parts.slice(1).join(' = ').trim() + '</strong>' };
     }
-
-    // Extract INPUT/RESULT/REASON — clean up print statements leaking in
-    const inputM  = remaining.match(/INPUT:\s*(.+)/i);
-    const resultM = remaining.match(/RESULT:\s*(.+)/i);
-    const reasonM = remaining.match(/REASON:\s*(.+)/i);
-
-    // Clean result value — remove raw Python like ", result)" 
-    let resultVal = resultM ? resultM[1].trim() : 'See output';
-    resultVal = resultVal.replace(/[",)]/g, '').replace(/result\s*$/, '').trim();
-    if (!resultVal || resultVal.length < 1) resultVal = 'See code output';
-
-    const desc = remaining.split('\n')[0].trim();
-    return {
-      code,
-      lang: detectLang(code),
-      desc: desc || '',
-      input:  inputM  ? inputM[1].trim()  : 'See code above',
-      result: resultVal,
-      reason: reasonM ? reasonM[1].trim() : 'Code runs correctly',
-      explanation: remaining.replace(/INPUT:.+/gi,'').replace(/RESULT:.+/gi,'').replace(/REASON:.+/gi,'').trim()
-    };
+    return { icon: '⬜ CODE', label: t, desc: 'Executes: <strong>' + t + '</strong>' };
   }
 
-  // Build output block HTML
+  // Build full line-by-line explanation — one bullet per line
+  function buildExplHtml(explText, lang, codeText) {
+    const items = [];
+
+    // Try to use NVIDIA-provided explanation first
+    if (explText && explText.trim().length > 30) {
+      const lines = explText.split('\n').filter(function(l){ return l.trim(); });
+      lines.forEach(function(l) {
+        l = l.replace(/^[-*•\d.)\s] ?/, '').trim();
+        if (!l) return;
+        const sep = l.indexOf(' — ') > -1 ? ' — ' : l.indexOf(' - ') > -1 ? ' - ' : null;
+        if (sep) {
+          const idx  = l.indexOf(sep);
+          const lbl  = l.slice(0, idx).trim();
+          const desc = l.slice(idx + sep.length).trim();
+          const isKw = /^(def|class|if|elif|else|for|while|return|import|from|public|static|void|int|print|with|try|except|break|continue)\b/.test(lbl);
+          const isCm = lbl.startsWith('#') || lbl.startsWith('//');
+          const icon = isKw ? '🔷 KEYWORD' : isCm ? '🟢 BUILT-IN' : '⬜ CODE';
+          items.push('<li><strong>' + icon + '</strong> <code>' + lbl + '</code> — ' + desc + '</li>');
+        } else {
+          items.push('<li>' + l + '</li>');
+        }
+      });
+    }
+
+    // If fewer than 3 bullets or no explanation — auto-generate from every code line
+    if (items.length < 3 && codeText) {
+      items.length = 0;
+      codeText.split('\n').forEach(function(line) {
+        if (!line.trim()) return;
+        const ex = autoExplainLine(line);
+        if (ex) {
+          items.push('<li><strong>' + ex.icon + '</strong> <code>' + ex.label + '</code> — ' + ex.desc + '</li>');
+        }
+      });
+    }
+
+    if (!items.length) return '';
+    return '<h3>&#128218; Line-by-Line Explanation</h3><ul>' + items.join('') + '</ul>';
+  }
+
+  // Build output block
   function buildOutBlock(input, result, reason) {
     return '<div class="out-block"><div class="out-header">&#9654; Expected Output</div>' +
       '<div class="out-body">' +
@@ -1041,169 +991,138 @@ app.post('/api/chat', auth, async (req, res) => {
       '</div></div>';
   }
 
-  // Auto-generate explanation for a single code line
-  function explainCodeLine(line, lang) {
-    const t = line.trim();
-    if (!t) return null;
-    const isComment = t.startsWith('#') || t.startsWith('//') || t.startsWith('/*');
-    // Python keywords
-    if (t.startsWith('def '))     return { icon:'🔷 KEYWORD', desc: 'Defines a new function named <strong>' + (t.match(/def (\w+)/)||[])[1] + '</strong>' };
-    if (t.startsWith('class '))   return { icon:'🔷 KEYWORD', desc: 'Creates a new class named <strong>' + (t.match(/class (\w+)/)||[])[1] + '</strong>' };
-    if (t.startsWith('import '))  return { icon:'🔷 KEYWORD', desc: 'Imports the <strong>' + t.replace('import ','') + '</strong> library for use in this program' };
-    if (t.startsWith('from '))    return { icon:'🔷 KEYWORD', desc: 'Imports specific items — <strong>' + t + '</strong>' };
-    if (t.startsWith('return '))  return { icon:'🔷 KEYWORD', desc: 'Returns <strong>' + t.replace('return ','') + '</strong> as the result of the function' };
-    if (t.startsWith('if '))      return { icon:'🔷 KEYWORD', desc: 'Checks the condition: <strong>' + t.replace(/^if /,'').replace(':','') + '</strong>' };
-    if (t.startsWith('elif '))    return { icon:'🔷 KEYWORD', desc: 'Else-if: checks another condition: <strong>' + t.replace(/^elif /,'').replace(':','') + '</strong>' };
-    if (t === 'else:')            return { icon:'🔷 KEYWORD', desc: 'Runs this block when none of the above conditions were true' };
-    if (t.startsWith('for '))     return { icon:'🔷 KEYWORD', desc: 'Loops through each item — <strong>' + t.replace(':','') + '</strong>' };
-    if (t.startsWith('while '))   return { icon:'🔷 KEYWORD', desc: 'Keeps looping as long as <strong>' + t.replace(/^while /,'').replace(':','') + '</strong> is true' };
-    if (t.startsWith('print('))   return { icon:'🟢 BUILT-IN', desc: 'Prints the result to the screen: <strong>' + t + '</strong>' };
-    if (t.startsWith('if __name__')) return { icon:'🔷 KEYWORD', desc: 'Runs the code below only when this file is executed directly, not when imported' };
-    // Java/C keywords
-    if (t.includes('public class'))  return { icon:'🔷 KEYWORD', desc: 'Declares a public class — the main container for all Java code' };
-    if (t.includes('public static void main')) return { icon:'🔷 KEYWORD', desc: 'The main method — this is where the Java program starts running' };
-    if (t.includes('public static')) return { icon:'🔷 KEYWORD', desc: 'Declares a public static method — can be called without creating an object' };
-    if (t.includes('#include'))  return { icon:'🔷 KEYWORD', desc: 'Includes the <strong>' + (t.match(/<(.+)>/)||['','header'])[1] + '</strong> library — gives access to built-in functions' };
-    if (t.includes('int main()')) return { icon:'🔷 KEYWORD', desc: 'The main function — this is where the C program starts running' };
-    if (t.includes('printf('))   return { icon:'🟢 BUILT-IN', desc: 'Prints formatted output to the screen: <strong>' + t + '</strong>' };
-    if (t === 'return 0;')       return { icon:'🔷 KEYWORD', desc: 'Returns 0 to the operating system — signals the program finished successfully' };
-    if (t === '{' || t === '}')  return { icon:'⬜ CODE',    desc: (t==='{' ? 'Opens' : 'Closes') + ' a block of code' };
-    if (isComment)               return { icon:'🟢 BUILT-IN', desc: 'Comment explaining the next line: <em>' + t + '</em>' };
-    // Variable assignment
-    if (t.includes(' = '))       return { icon:'⬜ CODE', desc: 'Sets <strong>' + t.split(' = ')[0].trim() + '</strong> to <strong>' + t.split(' = ').slice(1).join(' = ').trim() + '</strong>' };
-    return { icon:'⬜ CODE', desc: 'Executes: <strong>' + t + '</strong>' };
+  // Detect language from user message context
+  function detectLangFromMsg(msgContent) {
+    const lower = (msgContent || '').toLowerCase();
+    if (lower.includes('java ') || lower.includes(' java')) return 'java';
+    if (lower.includes(' c ') || lower.includes('c program') || lower.includes('in c')) return 'c';
+    if (lower.includes('python')) return 'python';
+    if (lower.includes('typescript') || lower.includes(' ts ')) return 'typescript';
+    if (lower.includes('javascript') || lower.includes(' js ')) return 'javascript';
+    if (lower.includes('sql') || lower.includes('database')) return 'sql';
+    if (lower.includes('html') || lower.includes('css')) return 'html';
+    if (lower.includes('go ') || lower.includes('golang')) return 'go';
+    if (lower.includes('rust')) return 'rust';
+    return null;
   }
 
-  // Build line-by-line explanation — one bullet per code line
-  function buildExplHtml(explText, lang, codeText) {
-    const items = [];
+  // Parse NVIDIA section to extract code + metadata
+  function parseNvidiaSection(sectionText, hintLang) {
+    let code = '';
+    let remaining = sectionText;
 
-    // If NVIDIA provided explanation bullets, parse them
-    if (explText && explText.trim().length > 20) {
-      const lines = explText.split('\n').filter(function(l){ return l.trim(); });
-      lines.forEach(function(l) {
-        l = l.replace(/^[-*•\d.)] ?/, '').trim();
-        if (!l) return;
-        const sepIdx = l.indexOf(' — ') > -1 ? l.indexOf(' — ') :
-                       l.indexOf(' - ')  > -1 ? l.indexOf(' - ')  : -1;
-        if (sepIdx > -1) {
-          const rawLabel = l.slice(0, sepIdx).trim();
-          const desc     = l.slice(sepIdx + 3).trim();
-          const isKeyword = /^(def|class|if|elif|else|for|while|return|import|from|public|static|void|int|float|bool|print|with|try|except|finally|break|continue)\b/.test(rawLabel);
-          const isComment = rawLabel.startsWith('#') || rawLabel.startsWith('//');
-          const icon = isKeyword ? '🔷 KEYWORD' : isComment ? '🟢 BUILT-IN' : '⬜ CODE';
-          items.push('<li><strong>' + icon + '</strong> <code>' + rawLabel + '</code> — ' + desc + '</li>');
-        } else {
-          items.push('<li>' + l + '</li>');
-        }
+    // Try fenced code block first
+    const fenced = sectionText.match(/```(\w*)[\r\n]([\s\S]*?)```/);
+    if (fenced) {
+      code = fixCollapsedCode(fenced[2].trim());
+      remaining = sectionText.replace(fenced[0], '').trim();
+    } else {
+      // Fallback: extract lines that look like code
+      const lines = sectionText.split('\n');
+      const codeLines = []; const textLines = [];
+      lines.forEach(function(line) {
+        const t = line.trim();
+        if (t.match(/^(def |class |import |from |public |private |static |#include|int |void |if |elif |else:|for |while |return |print|func |fn |let |const |var |SELECT |FROM |INSERT|CREATE|UPDATE|DELETE|<html|<div|<!DOCTYPE|interface )/i) ||
+            line.startsWith('    ') || line.startsWith('\t')) {
+          codeLines.push(line);
+        } else { textLines.push(line); }
       });
+      if (codeLines.length > 1) {
+        code = fixCollapsedCode(codeLines.join('\n').trim());
+        remaining = textLines.join('\n').trim();
+      }
     }
 
-    // If we have the actual code, auto-generate missing explanations line by line
-    if (codeText && items.length < 3) {
-      items.length = 0; // reset and rebuild from code
-      const codeLines = codeText.split('\n');
-      codeLines.forEach(function(line) {
-        if (!line.trim()) return;
-        const explained = explainCodeLine(line, lang);
-        if (explained) {
-          items.push('<li><strong>' + explained.icon + '</strong> <code>' + line.trim() + '</code> — ' + explained.desc + '</li>');
-        }
-      });
-    }
+    const inputM  = remaining.match(/INPUT:\s*(.+)/i);
+    const resultM = remaining.match(/RESULT:\s*(.+)/i);
+    const reasonM = remaining.match(/REASON:\s*(.+)/i);
+    let resultVal = resultM ? resultM[1].trim() : 'See output';
+    resultVal = resultVal.replace(/[",)]/g,'').replace(/result\s*$/,'').trim() || 'See code output';
 
-    if (!items.length) return '';
-    return '<h3>&#128218; Line-by-Line Explanation</h3><ul>' + items.join('') + '</ul>';
+    return {
+      code, lang: detectLang(code) || hintLang || 'python',
+      desc: remaining.split('\n')[0].trim(),
+      input:  inputM  ? inputM[1].trim()  : 'See code above',
+      result: resultVal,
+      reason: reasonM ? reasonM[1].trim() : 'Code runs correctly',
+      explanation: remaining.replace(/INPUT:.+/gi,'').replace(/RESULT:.+/gi,'').replace(/REASON:.+/gi,'').trim()
+    };
   }
 
-  // Convert NVIDIA plain-text response into full Gemini-identical HTML
-  function nvidiaMarkdownToHtml(text) {
-    // If already proper HTML, just fix collapsed code and return
+  // Convert NVIDIA response into full Gemini-identical HTML
+  function nvidiaMarkdownToHtml(text, hintLang) {
+    // If already proper HTML — just fix collapsed code
     if (text.includes('<pre>') || text.includes('<div class=') || text.includes('<h3>')) {
       return text.replace(/<code([^>]*)>([\s\S]*?)<\/code>/g, function(m, attrs, code) {
         return '<code' + attrs + '>' + fixCollapsedCode(code) + '</code>';
       });
     }
 
-    // Parse sections by ===SECTION=== markers
-    const conceptMatch = text.match(/===CONCEPT===([\s\S]*?)(?====)/);
-    const easyMatch    = text.match(/===EASY===([\s\S]*?)(?====)/);
-    const explMatch    = text.match(/===EXPLANATION===([\s\S]*?)(?====)/);
-    const optMatch     = text.match(/===OPTIMIZED===([\s\S]*?)(?====|$)/);
-    const tipMatch     = text.match(/===TIP===([\s\S]*?)(?====|$)/);
+    // Parse all sections
+    const conceptM = text.match(/===CONCEPT===([\s\S]*?)(?====)/);
+    const easyM    = text.match(/===EASY===([\s\S]*?)(?====)/);
+    const explM    = text.match(/===EXPLANATION===([\s\S]*?)(?====)/);
+    const traceM   = text.match(/===TRACE===([\s\S]*?)(?====|$)/);
+    const optM     = text.match(/===OPTIMIZED===([\s\S]*?)(?====|$)/);
+    const tipM     = text.match(/===TIP===([\s\S]*?)(?====|$)/);
 
-    const concept  = conceptMatch ? conceptMatch[1].trim() : '';
-    const easyRaw  = easyMatch    ? easyMatch[1].trim()    : text;
-    const explRaw  = explMatch    ? explMatch[1].trim()    : '';
-    const optRaw   = optMatch     ? optMatch[1].trim()     : '';
-    const tip      = tipMatch     ? tipMatch[1].trim()     : 'Great effort! Keep practising every day.';
+    const concept = conceptM ? conceptM[1].trim() : '';
+    const easyRaw = easyM   ? easyM[1].trim()    : text;
+    const explRaw = explM   ? explM[1].trim()     : '';
+    const traceRaw= traceM  ? traceM[1].trim()    : '';
+    const optRaw  = optM    ? optM[1].trim()       : '';
+    const tip     = tipM    ? tipM[1].trim()       : 'Keep practising — you are doing great!';
 
-    const easy = parseNvidiaSection(easyRaw);
-    const opt  = optRaw ? parseNvidiaSection(optRaw) : null;
+    const easy = parseNvidiaSection(easyRaw, hintLang);
+    const opt  = optRaw ? parseNvidiaSection(optRaw, hintLang) : null;
+    const expl = explRaw || easy.explanation;
 
-    // Build Easy code block
+    // Code HTML
     const easyCodeHtml = easy.code
       ? '<pre><code data-lang="' + easy.lang + '">' + easy.code + '</code></pre>'
-      : '<p>No code generated.</p>';
-
-    // Build Optimized code block
+      : '<p>See explanation below.</p>';
     const optCodeHtml = opt && opt.code
       ? '<pre><code data-lang="' + opt.lang + '">' + opt.code + '</code></pre>'
-      : '<p>No optimized version available.</p>';
+      : '<p>No optimized version.</p>';
 
-    // Build explanation (use dedicated section or fallback to easy explanation)
-    const explText = explRaw || easy.explanation;
-    const explHtml = buildExplHtml(explText, easy.lang, easy.code);
-
-    // Build trace block from ===TRACE=== section
-    const traceMatch = text.match(/===TRACE===([\s\S]*?)(?====|$)/);
-    const traceRaw   = traceMatch ? traceMatch[1].trim() : '';
-    function buildTraceHtml(traceText, inputVal, resultVal) {
-      let steps = '<div class="trace-step"><span class="trace-n">Input</span><span class="trace-desc">' + inputVal + '</span></div>';
-      if (traceText) {
-        const lines = traceText.split('\n').filter(function(l){ return l.trim().length > 3; });
-        lines.forEach(function(line) {
-          const stepM  = line.match(/^STEP\s*(\d+)\s*[:.]?\s*(.+)/i);
-          const outM   = line.match(/^OUTPUT\s*[:.]?\s*(.+)/i);
-          if (stepM) {
-            steps += '<div class="trace-step"><span class="trace-n">Step ' + stepM[1] + '</span><span class="trace-desc">' + stepM[2].trim() + '</span></div>';
-          } else if (outM) {
-            steps += '<div class="trace-step"><span class="trace-n">&#10003; Output: ' + outM[1].trim() + '</span><span class="trace-desc">This is the final answer.</span></div>';
-          }
-        });
-      } else {
-        // fallback: no trace section, show result only
-        steps += '<div class="trace-step"><span class="trace-n">Result</span><span class="trace-desc">' + resultVal + '</span></div>';
-      }
-      return steps;
+    // Trace HTML
+    let traceSteps = '<div class="trace-step"><span class="trace-n">Input</span><span class="trace-desc">' + easy.input + '</span></div>';
+    if (traceRaw) {
+      traceRaw.split('\n').forEach(function(line) {
+        const sm = line.match(/^STEP\s*(\d+)\s*[:.]?\s*(.+)/i);
+        const om = line.match(/^OUTPUT\s*[:.]?\s*(.+)/i);
+        if (sm) traceSteps += '<div class="trace-step"><span class="trace-n">Step ' + sm[1] + '</span><span class="trace-desc">' + sm[2].trim() + '</span></div>';
+        else if (om) traceSteps += '<div class="trace-step"><span class="trace-n">&#10003; Output: ' + om[1].trim() + '</span><span class="trace-desc">This is the final answer.</span></div>';
+      });
+    } else {
+      traceSteps += '<div class="trace-step"><span class="trace-n">Result</span><span class="trace-desc">' + easy.result + '</span></div>';
     }
-    const traceHtml = '<div class="trace-block"><div class="trace-header">&#128269; Real-Time Test Case Execution</div>' +
-      '<div class="trace-body">' +
-      buildTraceHtml(traceRaw, easy.input, easy.result) +
-      '</div></div>';
+    const traceHtml = '<div class="trace-block"><div class="trace-header">&#128269; Real-Time Test Case Execution</div><div class="trace-body">' + traceSteps + '</div></div>';
 
-    // Full Gemini-identical structure
+    const explHtml    = buildExplHtml(expl, easy.lang, easy.code);
+    const optExplHtml = opt ? buildExplHtml(opt.explanation, opt.lang, opt.code) : '';
+
     return '<h3>&#129504; Concept Explanation</h3>' +
-      '<p>' + (concept || easy.desc) + '</p>' +
+      '<p>' + (concept || easy.desc || 'See easy version below.') + '</p>' +
       '<div class="solution-tabs">' +
       "<button class=\"sol-tab easy-tab active\" onclick=\"showSolution(this,'easy')\">&#11137; Easy</button>" +
       "<button class=\"sol-tab opt-tab\" onclick=\"showSolution(this,'optimized')\">&#8710; Optimized</button>" +
       '</div>' +
       '<div class="sol-easy">' +
-      '<p>' + (easy.desc || 'Easy version using a simple approach.') + '</p>' +
+      '<p>' + (easy.desc || 'Simple approach.') + '</p>' +
       easyCodeHtml +
       buildOutBlock(easy.input, easy.result, easy.reason) +
-      explHtml +
-      traceHtml +
+      explHtml + traceHtml +
       '</div>' +
       '<div class="sol-opt" style="display:none">' +
-      '<p>' + (opt ? opt.desc : 'Optimized using a more efficient approach.') + '</p>' +
+      '<p>' + (opt ? (opt.desc || 'More efficient approach.') : 'Optimized version.') + '</p>' +
       optCodeHtml +
       (opt ? buildOutBlock(opt.input, opt.result, opt.reason) : '') +
-      (opt ? buildExplHtml(opt.explanation, opt.lang, opt.code) : '') +
+      optExplHtml +
       '</div>' +
       '<div class="tipb">' + tip + '</div>';
   }
+
 
   const callNvidiaModel = (model, apiKey, msgs) => new Promise((resolve, reject) => {
     const nvidiaPayload = JSON.stringify({
@@ -1288,7 +1207,8 @@ app.post('/api/chat', auth, async (req, res) => {
                   }
                 } catch(e) { /* ignore optimized fetch error */ }
               }
-              const cleanText = nvidiaMarkdownToHtml(fullText);
+              const hintLang = detectLangFromMsg((messages.find(function(m){return m.role==='user';})||{}).content);
+              const cleanText = nvidiaMarkdownToHtml(fullText, hintLang);
               return res.json({ content: [{ type: 'text', text: cleanText }] });
             }
           } else if (response.status === 429) {
