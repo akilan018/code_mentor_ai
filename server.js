@@ -855,28 +855,50 @@ NO markdown. NO asterisks. NO backticks. NO hash symbols. ONLY HTML tags.`;
     return msgs;
   }
 
-  // Convert NVIDIA markdown response to HTML if it didn't follow instructions
+  // Fix code that NVIDIA collapses onto one line
+  function fixCollapsedCode(code) {
+    let fixed = code;
+    // Insert newline before Python keywords merged onto same line
+    const kwds = ['import ', 'from ', 'def ', 'class ', 'elif ', 'else:', 'for ', 'while ', 'return ', 'with ', 'try:', 'except ', 'finally:'];
+    kwds.forEach(kw => {
+      fixed = fixed.split(' ' + kw).join('\n' + kw);
+    });
+    // Split "# comment  actual_code" into two lines
+    fixed = fixed.replace(/(#[^\n]+?)  +([a-zA-Z_])/g, '$1\n$2');
+    // Split Java/C/JS semicolons before comments
+    fixed = fixed.replace(/; *(\/\/)/g, ';\n$1');
+    fixed = fixed.replace(/\{ *(\/\/)/g, '{\n  $1');
+    fixed = fixed.replace(/\} *(\/\/)/g, '}\n$1');
+    return fixed.trim();
+  }
+
+  // Convert NVIDIA response to clean HTML
   function nvidiaMarkdownToHtml(text) {
+    // Fix collapsed code inside existing <code> tags
+    text = text.replace(/<code([^>]*)>([\s\S]*?)<\/code>/g, function(m, attrs, code) {
+      return '<code' + attrs + '>' + fixCollapsedCode(code) + '</code>';
+    });
+    // If already HTML return it
     if (text.includes('<h3>') || text.includes('<pre>') || text.includes('<div')) {
-      return text; // Already HTML, return as-is
+      return text;
     }
-    // Convert markdown to basic HTML
+    // Convert markdown headings and formatting
     let html = text
       .replace(/^### (.+)$/gm, '<h3>$1</h3>')
       .replace(/^## (.+)$/gm, '<h3>$1</h3>')
       .replace(/^# (.+)$/gm, '<h3>$1</h3>')
       .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/^- (.+)$/gm, '<li>$1</li>')
-      .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>');
-    // Wrap code blocks
-    html = html.replace(/```(\w+)?\n([\s\S]*?)```/g, (_, lang, code) => {
+      .replace(/`([^`\n]+)`/g, '<code>$1</code>')
+      .replace(/^[-*] (.+)$/gm, '<li>$1</li>')
+      .replace(/(<li>[\s\S]*?<\/li>)/g, '<ul>$1</ul>');
+    // Convert fenced code blocks
+    html = html.replace(/```(\w*)\n([\s\S]*?)```/g, function(_, lang, code) {
       const l = lang || 'python';
-      return '<pre><code data-lang="' + l + '">' + code.trim() + '</code></pre>';
+      return '<pre><code data-lang="' + l + '">' + fixCollapsedCode(code).trim() + '</code></pre>';
     });
-    // Wrap remaining paragraphs
-    html = html.replace(/^(?!<[hupd])(.+)$/gm, '<p>$1</p>');
-    return '<h3>🧠 Answer</h3>' + html + '<div class="tipb">Keep practising — you are doing great!</div>';
+    // Wrap plain text lines
+    html = html.replace(/^(?!<)(.+)$/gm, '<p>$1</p>');
+    return '<h3>\uD83E\uDDE0 Answer</h3>' + html + '<div class="tipb">Keep practising \u2014 you are doing great!</div>';
   }
 
   const callNvidiaModel = (model, apiKey, msgs) => new Promise((resolve, reject) => {
