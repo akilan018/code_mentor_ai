@@ -1073,6 +1073,12 @@ app.post('/api/chat', auth, async (req, res) => {
       }
     }
 
+    // Ensure sol-opt always has display:none — NVIDIA sometimes omits it
+    text = text.replace(/<div class="sol-opt"(?! style="display:none")/g, '<div class="sol-opt" style="display:none"');
+
+    // Ensure sol-easy is always visible by default
+    text = text.replace(/<div class="sol-easy" style="display:none"/g, '<div class="sol-easy"');
+
     return text;
   }
 
