@@ -850,7 +850,10 @@ app.post('/api/chat', auth, async (req, res) => {
       'REASON: [one sentence why this is correct]',
       '',
       '===EXPLANATION===',
-      '[bullet list — one bullet per line of code: KEYWORD/CODE codename — what it does]',
+      'Write ONE bullet for EVERY SINGLE LINE of code — no skipping any line.',
+      'Format: - codeline — what this line does in plain English',
+      'Example: - low = 0 — sets the left boundary of the search to the first index (0)',
+      'Example: - while low <= high: — keeps the loop running as long as search space exists',
       '',
       '===TRACE===',
       'STEP 1: [what happens at step 1 with actual values]',
@@ -958,10 +961,20 @@ app.post('/api/chat', auth, async (req, res) => {
 
   // Detect programming language from code content
   function detectLang(code) {
+    if (!code) return 'python';
     if (code.includes('public class ') || code.includes('public static void main')) return 'java';
-    if (code.includes('#include') || code.includes('int main()')) return 'c';
-    if (code.includes('function ') || code.includes('const ') || code.includes('let ')) return 'javascript';
-    if (code.includes('def ') || code.includes('import ') || code.includes('print(')) return 'python';
+    if (code.includes('#include') || code.includes('int main()') || code.includes('printf(')) return 'c';
+    if (code.includes('interface ') || code.includes(': string') || code.includes(': number') ||
+        code.includes(': boolean') || code.includes('type ') && code.includes('=') || code.includes('<T>')) return 'typescript';
+    if (code.includes('SELECT ') || code.includes('FROM ') || code.includes('INSERT INTO') ||
+        code.includes('CREATE TABLE') || code.includes('WHERE ')) return 'sql';
+    if (code.includes('<!DOCTYPE') || code.includes('<html') || code.includes('<div') ||
+        code.includes('<body') || code.includes('<head')) return 'html';
+    if (code.includes('func ') && code.includes('package ')) return 'go';
+    if (code.includes('fn ') && code.includes('let mut') || code.includes('impl ')) return 'rust';
+    if (code.includes('function ') || code.includes('const ') || code.includes('let ') ||
+        code.includes('var ') || code.includes('=>') || code.includes('console.log')) return 'javascript';
+    if (code.includes('def ') || code.includes('print(') || code.includes('import ')) return 'python';
     return 'python';
   }
 
@@ -969,21 +982,50 @@ app.post('/api/chat', auth, async (req, res) => {
   function parseNvidiaSection(sectionText) {
     let code = '';
     let remaining = sectionText;
-    const fenced = sectionText.match(/```(\w*)\n([\s\S]*?)```/);
+
+    // Try fenced code block first
+    const fenced = sectionText.match(/```(\w*)[\r\n]([\s\S]*?)```/);
     if (fenced) {
       code = fixCollapsedCode(fenced[2].trim());
       remaining = sectionText.replace(fenced[0], '').trim();
+    } else {
+      // Fallback: extract lines that look like code (start with keywords or indentation)
+      const lines = sectionText.split('\n');
+      const codeLines = [];
+      const textLines = [];
+      lines.forEach(function(line) {
+        const t = line.trim();
+        if (t.match(/^(def |class |import |from |public |private |protected |static |#include|int |void |if |elif |else|for |while |return |print|func |fn |let |const |var |SELECT |FROM |INSERT|CREATE|UPDATE|DELETE|<html|<div|<body|<!DOCTYPE|interface |type )/i)) {
+          codeLines.push(line);
+        } else if (line.startsWith('    ') || line.startsWith('\t')) {
+          codeLines.push(line);
+        } else {
+          textLines.push(line);
+        }
+      });
+      if (codeLines.length > 2) {
+        code = fixCollapsedCode(codeLines.join('\n').trim());
+        remaining = textLines.join('\n').trim();
+      }
     }
+
+    // Extract INPUT/RESULT/REASON — clean up print statements leaking in
     const inputM  = remaining.match(/INPUT:\s*(.+)/i);
     const resultM = remaining.match(/RESULT:\s*(.+)/i);
     const reasonM = remaining.match(/REASON:\s*(.+)/i);
+
+    // Clean result value — remove raw Python like ", result)" 
+    let resultVal = resultM ? resultM[1].trim() : 'See output';
+    resultVal = resultVal.replace(/[",)]/g, '').replace(/result\s*$/, '').trim();
+    if (!resultVal || resultVal.length < 1) resultVal = 'See code output';
+
     const desc = remaining.split('\n')[0].trim();
     return {
       code,
       lang: detectLang(code),
       desc: desc || '',
       input:  inputM  ? inputM[1].trim()  : 'See code above',
-      result: resultM ? resultM[1].trim() : 'See output',
+      result: resultVal,
       reason: reasonM ? reasonM[1].trim() : 'Code runs correctly',
       explanation: remaining.replace(/INPUT:.+/gi,'').replace(/RESULT:.+/gi,'').replace(/REASON:.+/gi,'').trim()
     };
@@ -999,20 +1041,78 @@ app.post('/api/chat', auth, async (req, res) => {
       '</div></div>';
   }
 
-  // Build line-by-line explanation HTML from plain text bullets
-  function buildExplHtml(explText) {
-    if (!explText) return '';
-    const lines = explText.split('\n').filter(function(l){ return l.trim(); });
-    const items = lines.map(function(l) {
-      l = l.replace(/^[-*•] ?/, '').trim();
-      const colonIdx = l.indexOf(' — ');
-      if (colonIdx > -1) {
-        const label = l.slice(0, colonIdx).trim();
-        const desc  = l.slice(colonIdx + 3).trim();
-        return '<li><strong>⬜ CODE</strong> <code>' + label + '</code> — ' + desc + '</li>';
-      }
-      return '<li>' + l + '</li>';
-    });
+  // Auto-generate explanation for a single code line
+  function explainCodeLine(line, lang) {
+    const t = line.trim();
+    if (!t) return null;
+    const isComment = t.startsWith('#') || t.startsWith('//') || t.startsWith('/*');
+    // Python keywords
+    if (t.startsWith('def '))     return { icon:'🔷 KEYWORD', desc: 'Defines a new function named <strong>' + (t.match(/def (\w+)/)||[])[1] + '</strong>' };
+    if (t.startsWith('class '))   return { icon:'🔷 KEYWORD', desc: 'Creates a new class named <strong>' + (t.match(/class (\w+)/)||[])[1] + '</strong>' };
+    if (t.startsWith('import '))  return { icon:'🔷 KEYWORD', desc: 'Imports the <strong>' + t.replace('import ','') + '</strong> library for use in this program' };
+    if (t.startsWith('from '))    return { icon:'🔷 KEYWORD', desc: 'Imports specific items — <strong>' + t + '</strong>' };
+    if (t.startsWith('return '))  return { icon:'🔷 KEYWORD', desc: 'Returns <strong>' + t.replace('return ','') + '</strong> as the result of the function' };
+    if (t.startsWith('if '))      return { icon:'🔷 KEYWORD', desc: 'Checks the condition: <strong>' + t.replace(/^if /,'').replace(':','') + '</strong>' };
+    if (t.startsWith('elif '))    return { icon:'🔷 KEYWORD', desc: 'Else-if: checks another condition: <strong>' + t.replace(/^elif /,'').replace(':','') + '</strong>' };
+    if (t === 'else:')            return { icon:'🔷 KEYWORD', desc: 'Runs this block when none of the above conditions were true' };
+    if (t.startsWith('for '))     return { icon:'🔷 KEYWORD', desc: 'Loops through each item — <strong>' + t.replace(':','') + '</strong>' };
+    if (t.startsWith('while '))   return { icon:'🔷 KEYWORD', desc: 'Keeps looping as long as <strong>' + t.replace(/^while /,'').replace(':','') + '</strong> is true' };
+    if (t.startsWith('print('))   return { icon:'🟢 BUILT-IN', desc: 'Prints the result to the screen: <strong>' + t + '</strong>' };
+    if (t.startsWith('if __name__')) return { icon:'🔷 KEYWORD', desc: 'Runs the code below only when this file is executed directly, not when imported' };
+    // Java/C keywords
+    if (t.includes('public class'))  return { icon:'🔷 KEYWORD', desc: 'Declares a public class — the main container for all Java code' };
+    if (t.includes('public static void main')) return { icon:'🔷 KEYWORD', desc: 'The main method — this is where the Java program starts running' };
+    if (t.includes('public static')) return { icon:'🔷 KEYWORD', desc: 'Declares a public static method — can be called without creating an object' };
+    if (t.includes('#include'))  return { icon:'🔷 KEYWORD', desc: 'Includes the <strong>' + (t.match(/<(.+)>/)||['','header'])[1] + '</strong> library — gives access to built-in functions' };
+    if (t.includes('int main()')) return { icon:'🔷 KEYWORD', desc: 'The main function — this is where the C program starts running' };
+    if (t.includes('printf('))   return { icon:'🟢 BUILT-IN', desc: 'Prints formatted output to the screen: <strong>' + t + '</strong>' };
+    if (t === 'return 0;')       return { icon:'🔷 KEYWORD', desc: 'Returns 0 to the operating system — signals the program finished successfully' };
+    if (t === '{' || t === '}')  return { icon:'⬜ CODE',    desc: (t==='{' ? 'Opens' : 'Closes') + ' a block of code' };
+    if (isComment)               return { icon:'🟢 BUILT-IN', desc: 'Comment explaining the next line: <em>' + t + '</em>' };
+    // Variable assignment
+    if (t.includes(' = '))       return { icon:'⬜ CODE', desc: 'Sets <strong>' + t.split(' = ')[0].trim() + '</strong> to <strong>' + t.split(' = ').slice(1).join(' = ').trim() + '</strong>' };
+    return { icon:'⬜ CODE', desc: 'Executes: <strong>' + t + '</strong>' };
+  }
+
+  // Build line-by-line explanation — one bullet per code line
+  function buildExplHtml(explText, lang, codeText) {
+    const items = [];
+
+    // If NVIDIA provided explanation bullets, parse them
+    if (explText && explText.trim().length > 20) {
+      const lines = explText.split('\n').filter(function(l){ return l.trim(); });
+      lines.forEach(function(l) {
+        l = l.replace(/^[-*•\d.)] ?/, '').trim();
+        if (!l) return;
+        const sepIdx = l.indexOf(' — ') > -1 ? l.indexOf(' — ') :
+                       l.indexOf(' - ')  > -1 ? l.indexOf(' - ')  : -1;
+        if (sepIdx > -1) {
+          const rawLabel = l.slice(0, sepIdx).trim();
+          const desc     = l.slice(sepIdx + 3).trim();
+          const isKeyword = /^(def|class|if|elif|else|for|while|return|import|from|public|static|void|int|float|bool|print|with|try|except|finally|break|continue)\b/.test(rawLabel);
+          const isComment = rawLabel.startsWith('#') || rawLabel.startsWith('//');
+          const icon = isKeyword ? '🔷 KEYWORD' : isComment ? '🟢 BUILT-IN' : '⬜ CODE';
+          items.push('<li><strong>' + icon + '</strong> <code>' + rawLabel + '</code> — ' + desc + '</li>');
+        } else {
+          items.push('<li>' + l + '</li>');
+        }
+      });
+    }
+
+    // If we have the actual code, auto-generate missing explanations line by line
+    if (codeText && items.length < 3) {
+      items.length = 0; // reset and rebuild from code
+      const codeLines = codeText.split('\n');
+      codeLines.forEach(function(line) {
+        if (!line.trim()) return;
+        const explained = explainCodeLine(line, lang);
+        if (explained) {
+          items.push('<li><strong>' + explained.icon + '</strong> <code>' + line.trim() + '</code> — ' + explained.desc + '</li>');
+        }
+      });
+    }
+
+    if (!items.length) return '';
     return '<h3>&#128218; Line-by-Line Explanation</h3><ul>' + items.join('') + '</ul>';
   }
 
@@ -1053,7 +1153,7 @@ app.post('/api/chat', auth, async (req, res) => {
 
     // Build explanation (use dedicated section or fallback to easy explanation)
     const explText = explRaw || easy.explanation;
-    const explHtml = buildExplHtml(explText);
+    const explHtml = buildExplHtml(explText, easy.lang, easy.code);
 
     // Build trace block from ===TRACE=== section
     const traceMatch = text.match(/===TRACE===([\s\S]*?)(?====|$)/);
@@ -1100,7 +1200,7 @@ app.post('/api/chat', auth, async (req, res) => {
       '<p>' + (opt ? opt.desc : 'Optimized using a more efficient approach.') + '</p>' +
       optCodeHtml +
       (opt ? buildOutBlock(opt.input, opt.result, opt.reason) : '') +
-      (opt ? buildExplHtml(opt.explanation) : '') +
+      (opt ? buildExplHtml(opt.explanation, opt.lang, opt.code) : '') +
       '</div>' +
       '<div class="tipb">' + tip + '</div>';
   }
