@@ -826,31 +826,17 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   async function buildNvidiaMessages() {
-    // Simplified strict prompt for NVIDIA models — they need very explicit instructions
-    const nvidiaSystem = `You are a coding teacher. Answer in PURE HTML only.
-STRICT RULES:
-1. Use <h3> for headings, <p> for paragraphs, <ul><li> for lists.
-2. Wrap ALL code in: <pre><code data-lang="python"> ... </code></pre>
-   Use correct lang: python, java, c, javascript, cpp
-3. Every code line MUST have a comment on the line ABOVE it (never after, never same line):
-   # This comment explains the next line
-   x = 5
-4. Always show Easy version first inside <div class="sol-easy"> then Optimized in <div class="sol-opt" style="display:none">
-5. Add tabs: <div class="solution-tabs"><button class="sol-tab easy-tab active" onclick="showSolution(this,'easy')">⬡ Easy</button><button class="sol-tab opt-tab" onclick="showSolution(this,'optimized')">⌬ Optimized</button></div>
-6. After code add: <div class="out-block"><div class="out-header">▶ Expected Output</div><div class="out-body"><p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> [input]</p><p class="out-line"><strong>Result &nbsp;:</strong> [output]</p><p class="out-line"><strong>Reason &nbsp;:</strong> [why]</p></div></div>
-7. End with: <div class="tipb">encouraging message</div>
-NO markdown. NO asterisks. NO backticks. NO hash symbols. ONLY HTML tags.`;
-
-    const msgs = [{ role: 'system', content: nvidiaSystem }];
+    // Use the SAME full system prompt as Gemini — so NVIDIA output is identical
+    const msgs = [{ role: 'system', content: system || '' }];
     for (const m of messages) {
       if (m.role === 'assistant') {
         msgs.push({ role: 'assistant', content: m.content || '' }); continue;
       }
       const fileText = m.file?.data ? await fileToText(m.file) : null;
-      const content  = fileText
-        ? `${fileText}\n\nUser question: ${m.content || 'Please explain this.'}`
+      const userContent = fileText
+        ? fileText + '\n\nUser question: ' + (m.content || 'Please explain this.')
         : (m.content || '');
-      msgs.push({ role: 'user', content });
+      msgs.push({ role: 'user', content: userContent });
     }
     return msgs;
   }
@@ -858,17 +844,60 @@ NO markdown. NO asterisks. NO backticks. NO hash symbols. ONLY HTML tags.`;
   // Fix code that NVIDIA collapses onto one line
   function fixCollapsedCode(code) {
     let fixed = code;
-    // Insert newline before Python keywords merged onto same line
-    const kwds = ['import ', 'from ', 'def ', 'class ', 'elif ', 'else:', 'for ', 'while ', 'return ', 'with ', 'try:', 'except ', 'finally:'];
-    kwds.forEach(kw => {
-      fixed = fixed.split(' ' + kw).join('\n' + kw);
+
+    // Step 1: Protect "from X import Y" — replace with placeholder so it won't be split
+    const fromImports = [];
+    fixed = fixed.replace(/from [\w.]+ import [\w, *()]+/g, function(m) {
+      fromImports.push(m);
+      return '__FROMIMPORT' + (fromImports.length - 1) + '__';
     });
-    // Split "# comment  actual_code" into two lines
-    fixed = fixed.replace(/(#[^\n]+?)  +([a-zA-Z_])/g, '$1\n$2');
-    // Split Java/C/JS semicolons before comments
-    fixed = fixed.replace(/; *(\/\/)/g, ';\n$1');
-    fixed = fixed.replace(/\{ *(\/\/)/g, '{\n  $1');
-    fixed = fixed.replace(/\} *(\/\/)/g, '}\n$1');
+
+    // Step 2: Split "# comment  next_code" — double space after comment = new line
+    fixed = fixed.replace(/(#[^\n]*?)  +([a-zA-Z_#])/g, '$1\n$2');
+
+    // Step 3: Insert newline before standalone Python keywords merged mid-line
+    const kwds = ['import ', 'def ', 'class ', 'elif ', 'else:', 'for ', 'while ', 'with ', 'try:', 'except ', 'finally:', 'return ', 'if '];
+    kwds.forEach(function(kw) {
+      const parts = fixed.split(kw);
+      const rebuilt = [];
+      for (let i = 0; i < parts.length; i++) {
+        rebuilt.push(parts[i]);
+        if (i < parts.length - 1) {
+          const lastChar = parts[i].slice(-1);
+          if (lastChar !== '\n' && parts[i].trim().length > 0) {
+            rebuilt.push('\n' + kw);
+          } else {
+            rebuilt.push(kw);
+          }
+        }
+      }
+      fixed = rebuilt.join('');
+    });
+
+    // Step 4: Restore "from X import Y" placeholders
+    fromImports.forEach(function(fi, idx) {
+      fixed = fixed.replace('__FROMIMPORT' + idx + '__', fi);
+    });
+    // Ensure from-imports start on their own line
+    fixed = fixed.replace(/([^\n]) +(from [\w.]+ import)/g, '$1\n$2');
+
+    // Step 5: Split inline comments that got merged with code (single space)
+    // e.g. "import keras # Define model" → two lines
+    fixed = fixed.replace(/([^#\n]+) (#[^\n]+)/g, function(m, codePart, comment) {
+      // Only split if codePart is real code (not already a comment line)
+      if (codePart.trim().startsWith('#')) return m;
+      return codePart.trimEnd() + '\n' + comment;
+    });
+
+    // Step 6: Split Java/C/JS lines
+    fixed = fixed.replace(/;[ \t]+(\/\/)/g, ';\n$1');
+    fixed = fixed.replace(/\{[ \t]+(\/\/)/g, '{\n  $1');
+    fixed = fixed.replace(/\}[ \t]+(\/\/)/g, '}\n$1');
+
+    // Step 7: Remove trailing spaces and collapse triple newlines
+    fixed = fixed.replace(/ +\n/g, '\n');
+    fixed = fixed.replace(/\n{3,}/g, '\n\n');
+
     return fixed.trim();
   }
 
