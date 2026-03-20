@@ -820,8 +820,9 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   async function buildNvidiaMessages() {
-    // Send the EXACT same system prompt as Gemini — NVIDIA must produce identical HTML
-    const msgs = [{ role: 'system', content: system || '' }];
+    // Send same system prompt as Gemini + one extra reminder about Easy/Optimized order
+    const nvidiaReminder = '\n\nCRITICAL REMINDER: The div class="sol-easy" must contain the SIMPLE EASY beginner version of the code. The div class="sol-opt" must contain the OPTIMIZED efficient version. Never put optimized code in sol-easy or easy code in sol-opt.';
+    const msgs = [{ role: 'system', content: (system || '') + nvidiaReminder }];
     for (const m of messages) {
       if (m.role === 'assistant') {
         // Strip HTML from old replies for context — keep it short
@@ -1039,14 +1040,39 @@ app.post('/api/chat', auth, async (req, res) => {
     };
   }
 
-  // Process NVIDIA response — fix any collapsed code lines then return as-is
-  // NVIDIA now receives the exact same system prompt as Gemini so output should match
+  // Process NVIDIA response — fix collapsed code + fix Easy/Optimized swap
   function nvidiaMarkdownToHtml(text) {
     if (!text) return '<p>No response received.</p>';
+
     // Fix collapsed code inside any <code> blocks
     text = text.replace(/<code([^>]*)>([\s\S]*?)<\/code>/g, function(m, attrs, code) {
       return '<code' + attrs + '>' + fixCollapsedCode(code) + '</code>';
     });
+
+    // Detect and fix Easy/Optimized swap
+    // NVIDIA sometimes puts optimized code in sol-easy and easy code in sol-opt
+    // We detect this by checking if sol-easy contains complexity keywords like O(log n)
+    const easyMatch = text.match(/<div class="sol-easy">([\s\S]*?)<\/div>\s*<div class="sol-opt"/);
+    const optMatch  = text.match(/<div class="sol-opt"[^>]*>([\s\S]*?)<\/div>\s*<div class="tipb"/);
+
+    if (easyMatch && optMatch) {
+      const easyContent = easyMatch[1];
+      const optContent  = optMatch[1];
+      // If easy content has complexity indicators — they are swapped
+      const easyHasComplexity = /O\(log|O\(n log|bisect|more efficient|better complexity/i.test(easyContent);
+      const optIsSimpler      = /simple|basic|brute|linear|O\(n\)/i.test(optContent);
+
+      if (easyHasComplexity || optIsSimpler) {
+        // Swap the content back to correct order
+        text = text.replace(
+          /<div class="sol-easy">([\s\S]*?)(<\/div>\s*<div class="sol-opt")([^>]*>)([\s\S]*?)(<\/div>\s*<div class="tipb")/,
+          function(m, easyC, mid, optAttrs, optC, after) {
+            return '<div class="sol-easy">' + optC + mid + optAttrs + easyC + after;
+          }
+        );
+      }
+    }
+
     return text;
   }
 
