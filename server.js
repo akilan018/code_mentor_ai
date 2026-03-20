@@ -826,32 +826,52 @@ app.post('/api/chat', auth, async (req, res) => {
   });
 
   async function buildNvidiaMessages() {
-    // NVIDIA gets a simple, focused prompt — plain text output, no complex HTML
-    // We wrap the response into HTML on the server side after receiving it
     const simpleSystem = [
-      'You are a coding teacher for beginners. When asked to write code:',
-      '1. Write COMPLETE, RUNNABLE code only — no truncation, no shortcuts.',
-      '2. Every single code line MUST have a comment on the line DIRECTLY ABOVE it.',
-      '   WRONG: x = 5  # set x',
-      '   RIGHT:',
-      '   # Set x to starting value',
-      '   x = 5',
-      '3. For Python: always include if __name__ == "__main__": at the bottom.',
-      '4. For Java: always wrap in public class Main { public static void main... }',
-      '5. For C: always include #include <stdio.h> and int main() { ... return 0; }',
-      '6. After the code, write:',
-      '   INPUT: [exact input used]',
-      '   RESULT: [exact output printed]',
-      '   REASON: [one sentence why correct]',
-      '7. Then write a brief line-by-line explanation.',
-      '8. Use plain text only. No HTML tags. No markdown. No asterisks.',
-      '9. NEVER cut off or abbreviate code. Write every line in full.'
+      'You are a coding teacher for beginners. When asked to write code, always give TWO versions.',
+      '',
+      'FORMAT YOUR RESPONSE EXACTLY LIKE THIS:',
+      '',
+      '===CONCEPT===',
+      '[2-3 sentence explanation with a real-world analogy]',
+      '',
+      '===EASY===',
+      '[How the easy version works in 1 sentence]',
+      '```[language]',
+      '[COMPLETE RUNNABLE CODE — every line must have its comment on the line ABOVE it]',
+      '[NEVER put comment after code on same line]',
+      '[NEVER truncate or cut short — write every line in full]',
+      '```',
+      'INPUT: [exact input values]',
+      'RESULT: [exact output printed]',
+      'REASON: [one sentence why this is correct]',
+      '',
+      '===EXPLANATION===',
+      '[bullet list: KEYWORD/CODE name — what it does, for every single line]',
+      '',
+      '===OPTIMIZED===',
+      '[Why this version is better — time/space complexity]',
+      '```[language]',
+      '[COMPLETE OPTIMIZED CODE — same comment rules apply]',
+      '```',
+      'INPUT: [exact input values]',
+      'RESULT: [exact output printed]',
+      'REASON: [one sentence why this is correct]',
+      '',
+      '===TIP===',
+      '[encouraging message for the student]',
+      '',
+      'RULES:',
+      '1. NEVER truncate code. Write every line completely.',
+      '2. Comment goes on its OWN LINE ABOVE the code line it describes.',
+      '3. Python: include if __name__ == "__main__": block.',
+      '4. Java: wrap in public class Main { public static void main(String[] args) {} }',
+      '5. C: include #include <stdio.h> and int main() { return 0; }',
+      '6. Plain text only — no HTML, no markdown asterisks.'
     ].join('\n');
 
     const msgs = [{ role: 'system', content: simpleSystem }];
     for (const m of messages) {
       if (m.role === 'assistant') {
-        // For context, strip HTML from previous assistant replies
         const plainContent = (m.content || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 400);
         msgs.push({ role: 'assistant', content: plainContent }); continue;
       }
@@ -933,86 +953,125 @@ app.post('/api/chat', auth, async (req, res) => {
     return 'python';
   }
 
-  // Wrap a plain-text NVIDIA response into proper CodeMentor HTML structure
+  // Parse a section of NVIDIA plain text to extract code + metadata
+  function parseNvidiaSection(sectionText) {
+    let code = '';
+    let remaining = sectionText;
+    const fenced = sectionText.match(/```(\w*)\n([\s\S]*?)```/);
+    if (fenced) {
+      code = fixCollapsedCode(fenced[2].trim());
+      remaining = sectionText.replace(fenced[0], '').trim();
+    }
+    const inputM  = remaining.match(/INPUT:\s*(.+)/i);
+    const resultM = remaining.match(/RESULT:\s*(.+)/i);
+    const reasonM = remaining.match(/REASON:\s*(.+)/i);
+    const desc = remaining.split('\n')[0].trim();
+    return {
+      code,
+      lang: detectLang(code),
+      desc: desc || '',
+      input:  inputM  ? inputM[1].trim()  : 'See code above',
+      result: resultM ? resultM[1].trim() : 'See output',
+      reason: reasonM ? reasonM[1].trim() : 'Code runs correctly',
+      explanation: remaining.replace(/INPUT:.+/gi,'').replace(/RESULT:.+/gi,'').replace(/REASON:.+/gi,'').trim()
+    };
+  }
+
+  // Build output block HTML
+  function buildOutBlock(input, result, reason) {
+    return '<div class="out-block"><div class="out-header">&#9654; Expected Output</div>' +
+      '<div class="out-body">' +
+      '<p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> ' + input + '</p>' +
+      '<p class="out-line"><strong>Result &nbsp;:</strong> ' + result + '</p>' +
+      '<p class="out-line"><strong>Reason &nbsp;:</strong> ' + reason + '</p>' +
+      '</div></div>';
+  }
+
+  // Build line-by-line explanation HTML from plain text bullets
+  function buildExplHtml(explText) {
+    if (!explText) return '';
+    const lines = explText.split('\n').filter(function(l){ return l.trim(); });
+    const items = lines.map(function(l) {
+      l = l.replace(/^[-*•] ?/, '').trim();
+      const colonIdx = l.indexOf(' — ');
+      if (colonIdx > -1) {
+        const label = l.slice(0, colonIdx).trim();
+        const desc  = l.slice(colonIdx + 3).trim();
+        return '<li><strong>⬜ CODE</strong> <code>' + label + '</code> — ' + desc + '</li>';
+      }
+      return '<li>' + l + '</li>';
+    });
+    return '<h3>&#128218; Line-by-Line Explanation</h3><ul>' + items.join('') + '</ul>';
+  }
+
+  // Convert NVIDIA plain-text response into full Gemini-identical HTML
   function nvidiaMarkdownToHtml(text) {
-    // If already HTML, just fix any collapsed code inside it
+    // If already proper HTML, just fix collapsed code and return
     if (text.includes('<pre>') || text.includes('<div class=') || text.includes('<h3>')) {
       return text.replace(/<code([^>]*)>([\s\S]*?)<\/code>/g, function(m, attrs, code) {
         return '<code' + attrs + '>' + fixCollapsedCode(code) + '</code>';
       });
     }
 
-    // Parse plain text response from NVIDIA
-    // Extract code block (between ``` markers or indented block)
-    let codeBlock = '';
-    let remaining = text;
-    const fenced = text.match(/```(\w*)\n([\s\S]*?)```/);
-    if (fenced) {
-      codeBlock = fenced[2].trim();
-      remaining = text.replace(fenced[0], '').trim();
-    } else {
-      // Try to find indented code (4 spaces or tab indented lines)
-      const lines = text.split('\n');
-      const codeLines = [];
-      const textLines = [];
-      let inCode = false;
-      lines.forEach(function(line) {
-        if (line.startsWith('    ') || line.startsWith('\t') ||
-            line.match(/^(import |from |def |class |public |#include|int main)/)) {
-          codeLines.push(line.replace(/^    /, ''));
-          inCode = true;
-        } else {
-          if (inCode && line.trim() === '') { codeLines.push(''); }
-          else { textLines.push(line); }
-        }
-      });
-      codeBlock = codeLines.join('\n').trim();
-      remaining = textLines.join('\n').trim();
-    }
+    // Parse sections by ===SECTION=== markers
+    const conceptMatch = text.match(/===CONCEPT===([\s\S]*?)(?====)/);
+    const easyMatch    = text.match(/===EASY===([\s\S]*?)(?====)/);
+    const explMatch    = text.match(/===EXPLANATION===([\s\S]*?)(?====)/);
+    const optMatch     = text.match(/===OPTIMIZED===([\s\S]*?)(?====|$)/);
+    const tipMatch     = text.match(/===TIP===([\s\S]*?)(?====|$)/);
 
-    // Fix any collapsed code
-    codeBlock = fixCollapsedCode(codeBlock);
-    const lang = detectLang(codeBlock);
+    const concept  = conceptMatch ? conceptMatch[1].trim() : '';
+    const easyRaw  = easyMatch    ? easyMatch[1].trim()    : text;
+    const explRaw  = explMatch    ? explMatch[1].trim()    : '';
+    const optRaw   = optMatch     ? optMatch[1].trim()     : '';
+    const tip      = tipMatch     ? tipMatch[1].trim()     : 'Great effort! Keep practising every day.';
 
-    // Extract INPUT/RESULT/REASON if present
-    const inputMatch  = remaining.match(/INPUT:\s*(.+)/i);
-    const resultMatch = remaining.match(/RESULT:\s*(.+)/i);
-    const reasonMatch = remaining.match(/REASON:\s*(.+)/i);
-    const inputVal  = inputMatch  ? inputMatch[1].trim()  : 'See code above';
-    const resultVal = resultMatch ? resultMatch[1].trim() : 'See code output';
-    const reasonVal = reasonMatch ? reasonMatch[1].trim() : 'Code runs correctly';
+    const easy = parseNvidiaSection(easyRaw);
+    const opt  = optRaw ? parseNvidiaSection(optRaw) : null;
 
-    // Clean remaining text (remove INPUT/RESULT/REASON lines)
-    const explanation = remaining
-      .replace(/INPUT:.+/gi, '').replace(/RESULT:.+/gi, '').replace(/REASON:.+/gi, '')
-      .replace(/```[\s\S]*?```/g, '').trim();
-
-    // Build proper HTML structure matching Gemini output
-    const codeHtml = codeBlock
-      ? '<pre><code data-lang="' + lang + '">' + codeBlock + '</code></pre>'
+    // Build Easy code block
+    const easyCodeHtml = easy.code
+      ? '<pre><code data-lang="' + easy.lang + '">' + easy.code + '</code></pre>'
       : '<p>No code generated.</p>';
 
-    const outHtml = '<div class="out-block"><div class="out-header">&#9654; Expected Output</div>' +
-      '<div class="out-body">' +
-      '<p class="out-line"><strong>Input &nbsp;&nbsp;:</strong> ' + inputVal + '</p>' +
-      '<p class="out-line"><strong>Result &nbsp;:</strong> ' + resultVal + '</p>' +
-      '<p class="out-line"><strong>Reason &nbsp;:</strong> ' + reasonVal + '</p>' +
+    // Build Optimized code block
+    const optCodeHtml = opt && opt.code
+      ? '<pre><code data-lang="' + opt.lang + '">' + opt.code + '</code></pre>'
+      : '<p>No optimized version available.</p>';
+
+    // Build explanation (use dedicated section or fallback to easy explanation)
+    const explText = explRaw || easy.explanation;
+    const explHtml = buildExplHtml(explText);
+
+    // Build trace block
+    const traceHtml = '<div class="trace-block"><div class="trace-header">&#128269; Real-Time Test Case Execution</div>' +
+      '<div class="trace-body">' +
+      '<div class="trace-step"><span class="trace-n">Input</span><span class="trace-desc">' + easy.input + '</span></div>' +
+      '<div class="trace-step"><span class="trace-n">Result</span><span class="trace-desc">' + easy.result + '</span></div>' +
+      '<div class="trace-step"><span class="trace-n">Reason</span><span class="trace-desc">' + easy.reason + '</span></div>' +
       '</div></div>';
 
-    const explHtml = explanation
-      ? '<h3>&#128218; Explanation</h3><p>' + explanation.replace(/\n/g, '</p><p>') + '</p>'
-      : '';
-
-    return '<h3>&#129504; Easy Version</h3>' +
+    // Full Gemini-identical structure
+    return '<h3>&#129504; Concept Explanation</h3>' +
+      '<p>' + (concept || easy.desc) + '</p>' +
       '<div class="solution-tabs">' +
       '<button class="sol-tab easy-tab active" onclick="showSolution(this,\"easy\")">&#11137; Easy</button>' +
       '<button class="sol-tab opt-tab" onclick="showSolution(this,\"optimized\")">&#8710; Optimized</button>' +
       '</div>' +
       '<div class="sol-easy">' +
-      codeHtml + outHtml + explHtml +
+      '<p>' + (easy.desc || 'Easy version using a simple approach.') + '</p>' +
+      easyCodeHtml +
+      buildOutBlock(easy.input, easy.result, easy.reason) +
+      explHtml +
+      traceHtml +
       '</div>' +
-      '<div class="sol-opt" style="display:none"><p>Switch to Gemini for optimized version!</p></div>' +
-      '<div class="tipb">Great effort! Keep practising and you will master this.</div>';
+      '<div class="sol-opt" style="display:none">' +
+      '<p>' + (opt ? opt.desc : 'Optimized using a more efficient approach.') + '</p>' +
+      optCodeHtml +
+      (opt ? buildOutBlock(opt.input, opt.result, opt.reason) : '') +
+      (opt ? buildExplHtml(opt.explanation) : '') +
+      '</div>' +
+      '<div class="tipb">' + tip + '</div>';
   }
 
   const callNvidiaModel = (model, apiKey, msgs) => new Promise((resolve, reject) => {
