@@ -838,35 +838,43 @@ app.post('/api/chat', auth, async (req, res) => {
       '[How the easy version works in 1 sentence]',
       '```[language]',
       '[COMPLETE RUNNABLE CODE — every line must have its comment on the line ABOVE it]',
-      '[NEVER put comment after code on same line]',
-      '[NEVER truncate or cut short — write every line in full]',
+      '[NEVER put comment after code on same line — comment goes on its OWN line ABOVE]',
+      '[NEVER truncate or cut short — write every single line in full]',
       '```',
-      'INPUT: [exact input values]',
-      'RESULT: [exact output printed]',
+      'INPUT: [exact input values used when running the code]',
+      'RESULT: [exact output printed to screen]',
       'REASON: [one sentence why this is correct]',
       '',
       '===EXPLANATION===',
-      '[bullet list: KEYWORD/CODE name — what it does, for every single line]',
+      '[bullet list — one bullet per line of code: KEYWORD/CODE codename — what it does]',
+      '',
+      '===TRACE===',
+      'STEP 1: [what happens at step 1 with actual values]',
+      'STEP 2: [what happens at step 2 with actual values]',
+      'STEP 3: [what happens at step 3 with actual values]',
+      '[continue for each meaningful step — use real computed values at every step]',
+      'OUTPUT: [final answer with actual value]',
       '',
       '===OPTIMIZED===',
-      '[Why this version is better — time/space complexity]',
+      '[Why this version is better — mention time/space complexity]',
       '```[language]',
-      '[COMPLETE OPTIMIZED CODE — same comment rules apply]',
+      '[COMPLETE OPTIMIZED CODE — same comment rules: comment ABOVE each line]',
       '```',
       'INPUT: [exact input values]',
       'RESULT: [exact output printed]',
       'REASON: [one sentence why this is correct]',
       '',
       '===TIP===',
-      '[encouraging message for the student]',
+      '[one encouraging sentence for the student]',
       '',
       'RULES:',
       '1. NEVER truncate code. Write every line completely.',
-      '2. Comment goes on its OWN LINE ABOVE the code line it describes.',
-      '3. Python: include if __name__ == "__main__": block.',
+      '2. Comment goes on its OWN LINE ABOVE the code line — never after, never same line.',
+      '3. Python: include if __name__ == "__main__": block at bottom.',
       '4. Java: wrap in public class Main { public static void main(String[] args) {} }',
       '5. C: include #include <stdio.h> and int main() { return 0; }',
-      '6. Plain text only — no HTML, no markdown asterisks.'
+      '6. Plain text only — no HTML tags, no markdown asterisks, no backtick formatting.',
+      '7. In ===TRACE===, use REAL computed values at every step, not vague descriptions.'
     ].join('\n');
 
     const msgs = [{ role: 'system', content: simpleSystem }];
@@ -937,9 +945,9 @@ app.post('/api/chat', auth, async (req, res) => {
     fixed = fixed.replace(/\{[ \t]+(\/\/)/g, '{\n  $1');
     fixed = fixed.replace(/\}[ \t]+(\/\/)/g, '}\n$1');
 
-    // Step 7: Remove trailing spaces and collapse triple newlines
+    // Step 7: Remove trailing spaces and collapse ALL multiple newlines to single
     fixed = fixed.replace(/ +\n/g, '\n');
-    fixed = fixed.replace(/\n{3,}/g, '\n\n');
+    fixed = fixed.replace(/\n{2,}/g, '\n');
 
     return fixed.trim();
   }
@@ -1043,20 +1051,39 @@ app.post('/api/chat', auth, async (req, res) => {
     const explText = explRaw || easy.explanation;
     const explHtml = buildExplHtml(explText);
 
-    // Build trace block
+    // Build trace block from ===TRACE=== section
+    const traceMatch = text.match(/===TRACE===([\s\S]*?)(?====|$)/);
+    const traceRaw   = traceMatch ? traceMatch[1].trim() : '';
+    function buildTraceHtml(traceText, inputVal, resultVal) {
+      let steps = '<div class="trace-step"><span class="trace-n">Input</span><span class="trace-desc">' + inputVal + '</span></div>';
+      if (traceText) {
+        const lines = traceText.split('\n').filter(function(l){ return l.trim().length > 3; });
+        lines.forEach(function(line) {
+          const stepM  = line.match(/^STEP\s*(\d+)\s*[:.]?\s*(.+)/i);
+          const outM   = line.match(/^OUTPUT\s*[:.]?\s*(.+)/i);
+          if (stepM) {
+            steps += '<div class="trace-step"><span class="trace-n">Step ' + stepM[1] + '</span><span class="trace-desc">' + stepM[2].trim() + '</span></div>';
+          } else if (outM) {
+            steps += '<div class="trace-step"><span class="trace-n">&#10003; Output: ' + outM[1].trim() + '</span><span class="trace-desc">This is the final answer.</span></div>';
+          }
+        });
+      } else {
+        // fallback: no trace section, show result only
+        steps += '<div class="trace-step"><span class="trace-n">Result</span><span class="trace-desc">' + resultVal + '</span></div>';
+      }
+      return steps;
+    }
     const traceHtml = '<div class="trace-block"><div class="trace-header">&#128269; Real-Time Test Case Execution</div>' +
       '<div class="trace-body">' +
-      '<div class="trace-step"><span class="trace-n">Input</span><span class="trace-desc">' + easy.input + '</span></div>' +
-      '<div class="trace-step"><span class="trace-n">Result</span><span class="trace-desc">' + easy.result + '</span></div>' +
-      '<div class="trace-step"><span class="trace-n">Reason</span><span class="trace-desc">' + easy.reason + '</span></div>' +
+      buildTraceHtml(traceRaw, easy.input, easy.result) +
       '</div></div>';
 
     // Full Gemini-identical structure
     return '<h3>&#129504; Concept Explanation</h3>' +
       '<p>' + (concept || easy.desc) + '</p>' +
       '<div class="solution-tabs">' +
-      '<button class="sol-tab easy-tab active" onclick="showSolution(this,\"easy\")">&#11137; Easy</button>' +
-      '<button class="sol-tab opt-tab" onclick="showSolution(this,\"optimized\")">&#8710; Optimized</button>' +
+      "<button class=\"sol-tab easy-tab active\" onclick=\"showSolution(this,'easy')\">&#11137; Easy</button>" +
+      "<button class=\"sol-tab opt-tab\" onclick=\"showSolution(this,'optimized')\">&#8710; Optimized</button>" +
       '</div>' +
       '<div class="sol-easy">' +
       '<p>' + (easy.desc || 'Easy version using a simple approach.') + '</p>' +
@@ -1141,7 +1168,23 @@ app.post('/api/chat', auth, async (req, res) => {
             const text = p.choices?.[0]?.message?.content;
             if (text) {
               console.log(`✅ NVIDIA success: ${model} (key ${ki + 1})`);
-              const cleanText = nvidiaMarkdownToHtml(text);
+              // If NVIDIA didn't include optimized section, request it separately
+              let fullText = text;
+              if (!text.includes('===OPTIMIZED===') && nvidiaMsgs) {
+                try {
+                  const optMsgs = nvidiaMsgs.concat([
+                    { role: 'assistant', content: text.slice(0, 500) },
+                    { role: 'user', content: 'Now write the ===OPTIMIZED=== version of the same code with better time/space complexity. Use the exact same format: ===OPTIMIZED===, code block, INPUT, RESULT, REASON.' }
+                  ]);
+                  const optResp = await callNvidiaModel(model, NVIDIA_KEYS[ki], optMsgs);
+                  if (optResp.status === 200) {
+                    const optParsed = JSON.parse(optResp.data);
+                    const optText   = optParsed.choices?.[0]?.message?.content || '';
+                    if (optText) fullText = text + '\n' + optText;
+                  }
+                } catch(e) { /* ignore optimized fetch error */ }
+              }
+              const cleanText = nvidiaMarkdownToHtml(fullText);
               return res.json({ content: [{ type: 'text', text: cleanText }] });
             }
           } else if (response.status === 429) {
